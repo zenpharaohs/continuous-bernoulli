@@ -1,0 +1,39 @@
+# cb_sampler .gitignore
+
+# MATLAB compiled MEX files (platform-specific, must be built locally)
+*.mexw64
+*.mexmaca64
+*.mexmaci64
+*.mexglx
+*.mex
+*.obj
+*.exp
+*.lib
+
+# MATLAB workspace and figure files
+*.mat
+*.fig
+*.asv
+
+# Build artifacts
+build_log.txt
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.bak
+*~
+
+# Python build artifacts
+__pycache__/
+*.pyc
+*.so
+*.egg-info/
+build/
+dist/
+wheelhouse/
+
+# Linux MEX
+*.mexa64
