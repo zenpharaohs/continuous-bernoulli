@@ -4,16 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cb-sampler"
-version = "0.1.0"
+version = "0.1.0a1"
 description = "Continuous-binomial posterior sampler backed by the validated C implementation"
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
+license = "MIT"
 authors = [
   { name = "Andrew Mullhaupt" }
 ]
 classifiers = [
-  "License :: OSI Approved :: MIT License",
+  "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3",
   "Programming Language :: C",
   "Topic :: Scientific/Engineering :: Mathematics",
@@ -24,6 +24,7 @@ dependencies = [
 
 [project.urls]
 Repository = "https://github.com/zenpharaohs/continuous-bernoulli"
+Issues = "https://github.com/zenpharaohs/continuous-bernoulli/issues"
 
 [project.scripts]
 cb-validate = "cb_sampler.validation:main"
@@ -31,7 +32,7 @@ cb-example = "cb_sampler.examples:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-license-files = ["LICENSE"]
+include-package-data = false
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -52,4 +53,4 @@ test-requires = [
 archs = ["AMD64"]
 
 [tool.cibuildwheel.macos]
-archs = ["x86_64", "arm64"]
+archs = ["auto"]

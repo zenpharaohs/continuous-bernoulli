@@ -1,9 +1,31 @@
+from pathlib import Path
+
+import cb_sampler
 import numpy as np
 import pytest
 
 from cb_sampler import CbStream, draw_streams, sample
 from cb_sampler.examples import posterior_demo, streaming_demo
 from cb_sampler.validation import main as validation_main, run_validation
+
+
+def test_version_is_exposed():
+    assert cb_sampler.__version__ == "0.1.0a1"
+
+
+def test_packaged_c_core_matches_repository_authority():
+    repository = Path(__file__).resolve().parents[2]
+    authoritative = repository / "src" / "c"
+    packaged = repository / "python" / "src" / "cb_sampler" / "_csrc"
+    if not authoritative.exists():
+        pytest.skip("repository C authority is not present in the source archive")
+    assert (packaged / "cb_core.c").read_bytes() == (
+        authoritative / "cb_core.c"
+    ).read_bytes()
+    for name in ("cb_bft.h", "cb_rng.h"):
+        assert (packaged / "include" / name).read_bytes() == (
+            authoritative / "include" / name
+        ).read_bytes()
 
 
 def test_draw_shape_dtype_and_bounds():

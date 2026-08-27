@@ -5,7 +5,7 @@
 #include <limits.h>
 #include <math.h>
 
-#include "../../../src/c/cb_core.c"
+#include "_csrc/cb_core.c"
 
 typedef struct {
     PyObject_HEAD

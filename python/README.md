@@ -4,6 +4,10 @@ Python bindings for the validated continuous-binomial C sampler backend in
 this repository.  Python users do not need MATLAB to use or validate the
 sampler: the package includes its own validation harness and examples.
 
+```bash
+python -m pip install cb-sampler
+```
+
 `draw_streams(streams)` draws once from every independent `CbStream` through a
 single C-extension call.  It is intended for Thompson rounds with many live
 posteriors, where separate Python calls would dominate the actual sampler.

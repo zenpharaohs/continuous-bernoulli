@@ -9,16 +9,16 @@ Continuous Bernoulli conjugate posterior sampler for Thompson sampling bandits.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e ./python
+python -m pip install cb-sampler
 cb-example       # posterior draw summary and a small CB-vs-Beta bandit demo
 cb-validate      # validation suite
 ```
 
 The Python package compiles the same C sampler backend used by the MATLAB
-interface.  Note that the package builds against `src/c` in this repository,
-so it must be installed from a full clone (as above), not from `python/` in
-isolation.
+interface. To work from a clone instead, use
+`python -m pip install -e ./python` from the repository root. The release
+source archive carries a synchronized copy of the authoritative C core so it
+also builds without a repository checkout.
 
 ## MATLAB quick start
 

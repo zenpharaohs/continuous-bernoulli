@@ -11,7 +11,9 @@ import numpy as np
 
 from . import _backend
 
-__all__ = ["CbStream", "draw_streams", "sample"]
+__version__ = "0.1.0a1"
+
+__all__ = ["CbStream", "draw_streams", "sample", "__version__"]
 
 UINT64_MOD = 1 << 64
 
