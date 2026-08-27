@@ -44,7 +44,7 @@ pythonpath = ["src"]
 [tool.cibuildwheel]
 build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"
 skip = "*-win32 *-manylinux_i686 *-musllinux_*"
-test-command = "pytest --rootdir=. --override-ini=pythonpath= --import-mode=importlib {project}/tests -q"
+test-command = "pytest --rootdir=. --override-ini=pythonpath= --import-mode=importlib {project}/python/tests -q"
 test-requires = [
   "pytest",
 ]
