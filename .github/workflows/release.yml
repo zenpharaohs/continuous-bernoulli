@@ -76,48 +76,8 @@ jobs:
           name: release-distributions
           path: dist/*
 
-  publish-testpypi:
-    needs: collect
-    runs-on: ubuntu-latest
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/p/cb-sampler
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: release-distributions
-          path: dist
-      - uses: pypa/gh-action-pypi-publish@v1.14.2
-        with:
-          repository-url: https://test.pypi.org/legacy/
-
-  verify-testpypi:
-    needs: publish-testpypi
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-      - name: Install from TestPyPI
-        shell: bash
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          for attempt in {1..12}; do
-            if python -m pip install --no-cache-dir \
-              --index-url https://test.pypi.org/simple/ \
-              --extra-index-url https://pypi.org/simple/ \
-              "cb-sampler==${version}"; then
-              break
-            fi
-            if [ "$attempt" -eq 12 ]; then exit 1; fi
-            sleep 10
-          done
-          python -c "import cb_sampler; assert cb_sampler.__version__ == '${version}'; print(cb_sampler.sample(2, 5, seed=1))"
-
   publish-pypi:
-    needs: verify-testpypi
+    needs: collect
     runs-on: ubuntu-latest
     environment:
       name: pypi
