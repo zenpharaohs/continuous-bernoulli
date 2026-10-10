@@ -1,0 +1,123 @@
+{
+  "provenance": "Summary of user-provided MATLAB console output in this conversation; not a raw transcript.",
+  "date": "2026-10-10",
+  "implementation_commit": "32a6657",
+  "build": "Fresh production and diagnostic MEX builds succeeded with Xcode Clang.",
+  "quick": {
+    "started": "16:24:35",
+    "finished": "16:24:41",
+    "samples_per_ordinary_case": 100000,
+    "ordinary_cases": 23,
+    "result": "PASS",
+    "ks_failures": 0,
+    "ad_failures": 0,
+    "cvm_failures": 0,
+    "legendre_snr_above_3": 0,
+    "endpoint_cases": 96,
+    "samples_per_endpoint_case": 100000,
+    "endpoint_seconds": 4.13,
+    "cf_cases": 9,
+    "samples_per_cf_case": 100000,
+    "sampler_throughput_million_per_second": {
+      "CF": 55.8,
+      "ARS": 29.0
+    }
+  },
+  "focused_thorough": {
+    "started": "16:24:41",
+    "finished": "16:24:52",
+    "case_index": 19,
+    "chi": 250,
+    "nu": 500,
+    "samples": 100000000,
+    "result": "PASS",
+    "ks_display": 0.00011,
+    "ks_times_sqrt_n": 1.132,
+    "ad": 1.001,
+    "cvm": 0.2076,
+    "legendre_snr": 0.0,
+    "legendre_effective_degree": 0,
+    "hellinger_squared_legendre": 0.0,
+    "hellinger_squared_projection": 1.1e-08,
+    "raw_db": 1.97e-05,
+    "block_snr": [
+      0,
+      1,
+      -1,
+      0,
+      1
+    ],
+    "sampler_throughput_million_per_second": 48.3,
+    "pipeline_throughput_million_per_second": 21.4,
+    "endpoint_cases": 96,
+    "samples_per_endpoint_case": 100000,
+    "endpoint_seconds": 3.84,
+    "cf_cases": 9,
+    "samples_per_cf_case": 100000
+  },
+  "cf_qualification": [
+    {
+      "chi": 150.5,
+      "nu": 301,
+      "ks": 0.00348,
+      "result": "PASS"
+    },
+    {
+      "chi": 250,
+      "nu": 500,
+      "ks": 0.0034,
+      "result": "PASS"
+    },
+    {
+      "chi": 500,
+      "nu": 1000,
+      "ks": 0.00343,
+      "result": "PASS"
+    },
+    {
+      "chi": 2500,
+      "nu": 5000,
+      "ks": 0.00328,
+      "result": "PASS"
+    },
+    {
+      "chi": 500000,
+      "nu": 1000000,
+      "ks": 0.00331,
+      "result": "PASS"
+    },
+    {
+      "chi": 249.5,
+      "nu": 500,
+      "ks": 0.00338,
+      "result": "PASS"
+    },
+    {
+      "chi": 250.5,
+      "nu": 500,
+      "ks": 0.00338,
+      "result": "PASS"
+    },
+    {
+      "chi": 10000,
+      "nu": 1000000,
+      "ks": 0.0034,
+      "result": "PASS"
+    },
+    {
+      "chi": 990000,
+      "nu": 1000000,
+      "ks": 0.0034,
+      "result": "PASS"
+    }
+  ],
+  "checks_passed_in_both_runs": [
+    "Production MEX statistics replacements, reflection, boundaries and updates",
+    "Endpoint ARS, core/remainder, adaptive rescue and live buffers",
+    "MEX rejection budget and explicit remainder errors",
+    "CF live-buffer replacement",
+    "CF buffered and batch bounded-error checks"
+  ],
+  "scope": "Full 23-case quick suite and focused 100-million-draw case 19; the full ordinary thorough suite was not rerun.",
+  "interpretation": "Zero reported excess Legendre Hellinger distance means no discrepancy detected at this sample size, not proof of identically zero population distance."
+}

@@ -115,9 +115,24 @@ The CSV includes all seven states, five variants, sizes, counters and ranges.
 - Production C compiles with -Wall -Wextra without warnings; repository
   and packaged core sources match byte for byte.
 
-MATLAB/MEX: the new self-contained `cb_validate_cf` suite runs automatically
-inside `cb_validate`. Fresh quick and focused 100-million-draw results are
-pending the user's run.
+MATLAB/MEX qualification passed on 10 October 2026 after fresh Xcode Clang
+builds. The full quick suite passed all 23 ordinary cases at 100000 draws
+per case, all 96 endpoint cases, and all nine exact CF cases. Reflection,
+statistics replacement with live buffers, adaptive rescue and bounded-error
+checks passed directly through MEX.
+
+The previously failing symmetric CF case `(chi,nu)=(250,500)` also passed
+focused thorough qualification at **100 million draws**: KS*sqrt(N)=1.132,
+AD=1.001, CvM=0.2076, Legendre SNR=0.0 and effective degree=0. The previous
+uncorrected result had AD=5.343 and Legendre SNR=+7.9. No excess Legendre
+Hellinger discrepancy was detected; this is a statistical result, not a claim
+of zero population distance. Sampler throughput was 48.3 million draws/s
+(21.4 million/s including PIT and Legendre processing).
+
+The endpoint and nine-case CF qualifications passed again during that run.
+This reran case 19 at 100 million draws, not the full ordinary thorough suite.
+The user-provided console results are summarized in
+`docs/evidence/exact-cf/matlab-validation.json`.
 
 ## Reproduce
 
