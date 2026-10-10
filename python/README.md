@@ -46,3 +46,9 @@ PIT transform to C-backed sampler draws, reports KS/AD/CvM warning statistics,
 and uses adaptive Legendre chi-square as the decision signal.  The JSON artifact
 records platform metadata, the git commit when available, every case result,
 and the overall pass/fail verdict.
+
+
+`cb-validate` includes exact endpoint qualification in every mode. That section
+requires a C compiler (`cc`, `clang`, or `gcc`) and uses NumPy to check latent
+eta distributions, both reflections, and statistics replacement with live
+buffers under a 60-second deadline. Its results are included in `--json-out`.

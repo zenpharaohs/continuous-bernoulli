@@ -54,3 +54,6 @@ archs = ["AMD64"]
 
 [tool.cibuildwheel.macos]
 archs = ["auto"]
+
+[tool.setuptools.package-data]
+cb_sampler = ["_csrc/*.c", "_csrc/include/*.h"]

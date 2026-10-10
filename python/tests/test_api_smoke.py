@@ -199,7 +199,12 @@ def test_invalid_observations(x):
 def test_python_validation_smoke():
     results = run_validation(mode="smoke", n=2_000, grid_size=2000)
     assert len(results) > 0
-    assert all(abs(r.leg_snr) <= 3.0 for r in results)
+    assert all(r.passed for r in results)
+    endpoints = [r for r in results if r.kind == "endpoint_eta"]
+    assert len(endpoints) == 26
+    assert any(r.path == "core/remainder" for r in endpoints)
+    assert any(r.path == "live core buffer" for r in endpoints)
+    assert any(r.chi > r.nu/2 for r in endpoints)
 
 
 def test_python_validation_json_artifact(tmp_path):
@@ -207,7 +212,14 @@ def test_python_validation_json_artifact(tmp_path):
     rc = validation_main(["--mode", "smoke", "--n", "2_000", "--grid-size", "2000", "--json-out", str(out)])
     assert rc == 0
     assert out.exists()
-    assert '"passed": true' in out.read_text()
+    import json
+    report = json.loads(out.read_text())
+    assert report['passed'] is True
+    assert report['schema'] == 'cb_sampler.python_validation.v2'
+    endpoints = [r for r in report['results'] if r['kind'] == 'endpoint_eta']
+    assert len(endpoints) == 26
+    assert sum(r['path'] == 'live core buffer' for r in endpoints) == 2
+    assert all(r['reference_error'] <= 5e-7 for r in endpoints)
 
 
 def test_examples_smoke():

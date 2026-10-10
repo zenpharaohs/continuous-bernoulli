@@ -39,3 +39,36 @@ This policy mirrors the sibling Python package `hellinger-qualify`: use the
 streaming Legendre track for cheap large-N detection, and use fitted-Beta
 smoothed-spacing Hellinger for near-null certification when sorting the PIT
 sample is acceptable.
+
+## Exact endpoint qualification
+
+Both `cb-validate` (all modes) and `cb_validate.m` now run the same endpoint
+qualification suite automatically. It checks the two reported SPONG states,
+smaller gaps down to 1e-10, both reflections, and exact ARS/core/remainder
+sampling. Two cases retain a live core buffer across statistics replacement
+and test the subsequent draw distribution. It also checks 3000 replacements,
+regime transitions, and explicit failure of an invalid remainder subtraction.
+
+The C source is compiled twice in temporary storage: an unmodified API build
+for stream checks, and an instrumented build that returns eta before sigmoid
+for distribution checks. This qualifies the packaged C source; ordinary Python
+and MATLAB PIT checks continue to exercise their loaded backend. Endpoint
+rounding therefore cannot hide a wrong latent distribution. The independent
+NumPy density integral must agree within 5e-7 on 65537- and 131073-point grids.
+All 26 latent cases use a two-sided KS limit of 3/sqrt(N), plus reference-grid
+error. This conservative limit accounts for testing multiple cases. The entire
+endpoint worker, including compilation and rejection checks, has a 60-second
+deadline; a timeout or build failure fails validation.
+
+This section requires NumPy and a C compiler (`cc`, `clang`, or `gcc`), but not
+SciPy. It uses at most 100000 samples per endpoint case, even for larger
+ordinary PIT runs. MATLAB uses `python3` by default; set `cb_validate_python`
+to an interpreter path if needed. Endpoint results are included in Python's
+JSON report, now schema `cb_sampler.python_validation.v2`, with
+`kind="endpoint_eta"`, sample count, path, KS limit, and reference-grid error.
+
+To run just this section from the repository:
+
+```bash
+python3 tests/exact_endpoint_regression.py --n 16000
+```

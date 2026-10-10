@@ -28,7 +28,7 @@ and reflected draws may be indistinguishable from one at double precision.
 
 ## Verification
 
-Run `python3 tests/exact_endpoint_regression.py` with NumPy, SciPy, and a C
+Run `python3 tests/exact_endpoint_regression.py` with NumPy and a C
 compiler. The regression compiles an unmodified API build and a test-only build
 that records latent eta before sigmoid. It has a 60-second subprocess deadline.
 It tests 3000 successive replacements, the two reported states, opposite
@@ -50,3 +50,10 @@ these numerical tests explicitly exercise the exact path on both sides.
 The SPONG command using `CB_CORE_LIBRARY` set to the rebuilt shared library
 completed all 1395 trace rows. The Python API suite also includes a portable
 15-second timeout regression requiring no SciPy or compiler at test time.
+
+
+The endpoint regression is now shared with both regular validation entry
+points. Its current independent CDF uses converged NumPy quadrature and includes
+two additional live-buffer distribution cases (26 total). The SciPy results
+above record the original fix verification; see `docs/validation.md` for the
+current sample-dependent KS criterion and JSON report fields.

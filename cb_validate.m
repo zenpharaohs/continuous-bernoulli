@@ -133,15 +133,29 @@ catch e
     return;
 end
 
+%% Exact endpoint qualification
+% Theta PIT cannot certify an endpoint distribution after sigmoid rounding.
+% The shared qualification suite captures latent eta from the C exact path,
+% checks both reflections, and deadlines live-buffer replacements/rejections.
+% Override cb_validate_python with an interpreter that has NumPy installed.
+if ~exist('cb_validate_python', 'var') || isempty(cb_validate_python)
+    cb_validate_python = 'python3';
+end
+endpoint_script = fullfile(fileparts(mfilename('fullpath')), ...
+                          'tests', 'exact_endpoint_regression.py');
+fprintf('Exact endpoint qualification (60-second subprocess deadline):\n');
+[endpoint_status, endpoint_report] = system(sprintf('"%s" "%s" --n %d', ...
+    cb_validate_python, endpoint_script, min(N_QUAL, 100000)));
+fprintf('%s\n', endpoint_report);
+if endpoint_status ~= 0
+    error('cb_validate:endpointFailure', ...
+          'Exact endpoint qualification failed; validation is not certified.');
+end
+
 %% Test cases
-% Only Z <= 0.5 cases are tested directly.
-% High-Z (Z > 0.5) correctness follows from the exact reflection identity
-%   p(theta | chi, nu) = p(1-theta | nu-chi, nu)  [from B(eta)-B(-eta)=eta]
-% which is enforced in all sampling paths.  Testing both halves would be
-% redundant and would introduce PIT conditioning issues near theta=1 due to
-% the integrable (1-theta)^{-1/2} singularity of the CB density there.
-% Users are informed that high-Z output precision is IEEE 754-limited near
-% theta=1; this is a representation constraint, not a sampler error.
+% Ordinary theta PIT cases use the lower half to preserve output precision.
+% Both halves, including the reported SPONG states, are tested explicitly by
+% the latent-eta qualification above.
 cases = {
    0.25,    5,   'ARS   Z=0.05 nu=5    sig~8.9      ';   % wide, low-Z extreme
    0.50,   10,   'ARS   Z=0.05 nu=10   sig~6.3      ';   % wide, low-Z extreme

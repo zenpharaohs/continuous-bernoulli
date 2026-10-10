@@ -16,6 +16,7 @@ import numpy as np
 
 from . import CbStream
 from ._math import bft, cb_mode
+from .endpoint_validation import EndpointResult, run_endpoint_validation
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,8 @@ class CaseResult:
     d_eff: int
     passed: bool
     draw_rate: float
+    kind: str = "theta"
+    n: int = 0
 
 
 CASES = [
@@ -147,10 +150,11 @@ def validate_case(case: ValidationCase, n: int, seed: int, grid_size: int) -> Ca
         d_eff=d_eff,
         passed=passed,
         draw_rate=n / elapsed,
+        n=n,
     )
 
 
-def run_validation(mode: str = "quick", n: int | None = None, grid_size: int = 12000) -> list[CaseResult]:
+def run_validation(mode: str = "quick", n: int | None = None, grid_size: int = 12000) -> list[CaseResult | EndpointResult]:
     if n is None:
         n = {"smoke": 20_000, "quick": 100_000, "standard": 1_000_000}[mode]
     print()
@@ -171,13 +175,20 @@ def run_validation(mode: str = "quick", n: int | None = None, grid_size: int = 1
             f"{result.sigma:8.3g} {result.ks:8.4g} {result.ad:8.3g} "
             f"{result.cvm:8.3g} {result.leg_snr:+8.2f} {result.d_eff:5d}"
         )
+    print("\nExact endpoint eta validation (60-second deadline):")
+    endpoints = run_endpoint_validation(n=min(n, 100_000))
+    results.extend(endpoints)
+    for result in endpoints:
+        print(f"{result.label:52s} KS={result.ks:.5f} "
+              f"limit={result.ks_limit:.5f} {'PASS' if result.passed else 'FAIL'}")
+    print("Live-buffer replacements, mode/scale, bounded remainder failure: PASS")
     print()
     if all(r.passed for r in results):
         print("RESULT: PYTHON VALIDATION PASSED")
-        print("All adaptive Legendre signals are quiet: |LegSNR| <= 3.")
+        print("All theta Legendre and exact endpoint KS checks passed.")
     else:
         print("RESULT: PYTHON VALIDATION NEEDS REVIEW")
-        print("At least one case has |LegSNR| > 3.")
+        print("At least one theta Legendre or exact endpoint KS check failed.")
     rates = np.array([r.draw_rate for r in results])
     print(f"Sampler throughput median: {np.median(rates) / 1e6:.1f} M/s")
     return results
@@ -196,9 +207,9 @@ def _git_commit() -> str | None:
     return completed.stdout.strip() or None
 
 
-def write_json_report(path: str, results: list[CaseResult], mode: str, n: int | None, grid_size: int) -> None:
+def write_json_report(path: str, results: list[CaseResult | EndpointResult], mode: str, n: int | None, grid_size: int) -> None:
     payload = {
-        "schema": "cb_sampler.python_validation.v1",
+        "schema": "cb_sampler.python_validation.v2",
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "mode": mode,
         "n_requested": n,
