@@ -113,3 +113,6 @@ python3 tests/exact_endpoint_regression.py --n 16000
 
 The [adaptive exact ARS analysis](adaptive-exact-ars.md) records setup costs,
 proposal savings, and the independent 80-digit tangent and sensitivity audit.
+
+The [ordinary ARS profile](ordinary-ars-overhead.md) compares cumulative/alias
+selection, cached chords and inlining while retaining endpoint qualification.

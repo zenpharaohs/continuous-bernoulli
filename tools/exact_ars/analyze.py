@@ -95,10 +95,10 @@ if not args.benchmark_only:
     lib = load('shape_adaptive')
 
     def hull(chi, nu, refine):
-        out = (C.c_double * (4 + 16 * 8))()
+        out = (C.c_double * (4 + 16 * 10))()
         lib.inspect_hull(chi, nu, refine, out)
         m = int(out[0])
-        return dict(mode=out[1], sigma=out[2], padding=out[3], points=[list(out[4 + 8 * i:12 + 8 * i]) for i in range(m)])
+        return dict(mode=out[1], sigma=out[2], padding=out[3], points=[list(out[4 + 10 * i:14 + 10 * i]) for i in range(m)])
 
     def D(x):
         return dec.Decimal.from_float(float(x))
@@ -196,8 +196,7 @@ if not args.benchmark_only:
                     defect = max(defect, true_f - env)
                     if nodes[0] < x < nodes[-1]:
                         k = max(0, min(len(pts) - 2, bisect.bisect_right(nodes, x) - 1))
-                        t = (dx - D(nodes[k])) / (D(nodes[k + 1]) - D(nodes[k]))
-                        lower = (1 - t) * D(pts[k][1]) + t * D(pts[k + 1][1]) - pad
+                        lower = D(pts[k][1]) + D(pts[k][8])*(dx-D(nodes[k])) - pad
                         chord_excess = max(chord_excess, lower - true_f)
                 masses = [0.0] * len(pts)
                 for i, p in enumerate(pts):
@@ -208,11 +207,22 @@ if not args.benchmark_only:
                 total = sum(weights)
                 alias_error = max((abs(a - w / total) for a, w in zip(masses, weights)))
                 assert defect == 0 and chord_excess == 0 and (alias_error < 1e-14), (chi, nu, refined, defect, chord_excess, alias_error)
+                cdf_masses=[pts[0][9]]+[pts[i][9]-pts[i-1][9] for i in range(1,len(pts))]
+                cdf_error=max(abs(a-w/total) for a,w in zip(cdf_masses,weights))
+                assert cdf_error<1e-14 and all(a>=0 for a in cdf_masses)
+                # Cached chord is a line: endpoint bounds plus concavity
+                # certify its whole interval, including after refinement.
+                for k in range(len(pts)-1):
+                    for endpoint in [nodes[k],nodes[k+1]]:
+                        dx=D(endpoint)
+                        lower=D(pts[k][1])+D(pts[k][8])*(dx-D(nodes[k]))-pad
+                        chord_excess=max(chord_excess,lower-(dc*dx-dn*b(dx)))
+                assert chord_excess==0,(chi,nu,refined,chord_excess)
                 peak = dc * D(mode) - dn * b(D(mode))
                 drop_error = 0
                 if not refined & 1:
                     drop_error = max((float(abs(peak - (dc * D(p[0]) - dn * b(D(p[0]))) - D(drop))) for p, drop in zip(pts, [2, 0, 2] if refined & 2 else [5, 2, 0.5, 0, 0.5, 2, 5])))
-                rows.append(dict(chi=chi, nu=nu, rate=rate, hull_kind='short' if refined & 2 else 'full', refined=bool(refined & 1), m=len(pts), padding=h['padding'], upper_defect=float(defect), lower_excess=float(chord_excess), slope_relative_error=float(slope_error), density_error=float(f_error), intercept_error=float(intercept_error), drop_error=drop_error, alias_mass_error=alias_error))
+                rows.append(dict(chi=chi, nu=nu, rate=rate, hull_kind='short' if refined & 2 else 'full', refined=bool(refined & 1), m=len(pts), padding=h['padding'], upper_defect=float(defect), lower_excess=float(chord_excess), slope_relative_error=float(slope_error), density_error=float(f_error), intercept_error=float(intercept_error), drop_error=drop_error, alias_mass_error=alias_error,cdf_mass_error=cdf_error))
             original = hull(chi, nu, 0)
             for name, value, direction in [('chi', chi, -math.inf), ('chi', chi, math.inf), ('nu', nu, -math.inf), ('nu', nu, math.inf)]:
                 changed = math.nextafter(value, direction)
@@ -229,7 +239,7 @@ if not args.benchmark_only:
             w = csv.DictWriter(f, fieldnames=data[0])
             w.writeheader()
             w.writerows(data)
-    summary = {key: max(rows, key=lambda r: r[key]) for key in ['upper_defect', 'lower_excess', 'slope_relative_error', 'density_error', 'intercept_error', 'drop_error', 'alias_mass_error']}
+    summary = {key: max(rows, key=lambda r: r[key]) for key in ['upper_defect', 'lower_excess', 'slope_relative_error', 'density_error', 'intercept_error', 'drop_error', 'alias_mass_error','cdf_mass_error']}
     summary['max_perturbation'] = max(perturb, key=lambda r: r['mode_shift_sigma'])
     summary['states'] = len(cases)
     summary['hulls'] = len(rows)

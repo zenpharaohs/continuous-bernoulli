@@ -145,6 +145,13 @@ int adaptive_reuse(void) {
     if (s->ars_setups!=setups || s->ars_insertions<=insertions) return 0;
     cb_hull_t saved=s->hull;
     if (exact_hull_insert(s,&s->hull,s->hull.pts[0]) || memcmp(&saved,&s->hull,sizeof(saved))) return 0;
+    /* Compare the cache to the retained interpolation with identical RNG. */
+    cb_stream_t replay=*s;
+    double cached[65], interpolated[65];
+    for (int i=0;i<s->hull.m;++i) s->hull.chord_slopes[i]=NAN;
+    if (!draw_ars_batch(s,65,interpolated) || !draw_ars_batch(&replay,65,cached) ||
+        memcmp(cached,interpolated,sizeof(cached))) return 0;
+    s->hull=replay.hull;
     cb_stream_set_stats(s,7e-20,7);
     if (cb_stream_draw(s,1,&x)!=1 || s->ars_setups!=setups+1) return 0;
     cb_stream_destroy(s);

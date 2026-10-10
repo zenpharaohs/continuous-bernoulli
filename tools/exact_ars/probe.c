@@ -15,11 +15,16 @@ void inspect_hull(double chi,double nu,int insert,double *out){
 #else
  out[3]=h->padding;
 #endif
- for(int i=0;i<h->m;++i){double*v=out+4+8*i;v[0]=h->pts[i];v[1]=h->fvals[i];v[2]=h->slopes[i];v[3]=h->intercepts[i];v[4]=i<h->m-1?h->zpts[i]:0;v[5]=h->logwts[i];
+ for(int i=0;i<h->m;++i){double*v=out+4+10*i;v[0]=h->pts[i];v[1]=h->fvals[i];v[2]=h->slopes[i];v[3]=h->intercepts[i];v[4]=i<h->m-1?h->zpts[i]:0;v[5]=h->logwts[i];
 #ifdef CB_BENCH_BASELINE
  v[6]=1;v[7]=i;
 #else
  v[6]=h->alias_prob[i];v[7]=h->alias_idx[i];
+#endif
+#if defined(CB_ARS_CHORD_CACHE)
+ v[8]=h->chord_slopes[i];v[9]=h->cdf[i];
+#else
+ v[8]=0;v[9]=0;
 #endif
 }
  cb_stream_destroy(s);
@@ -77,5 +82,59 @@ void insertion_cost(double chi,double nu,int reps,double *out) {
     out[0]=(seconds()-start)/reps;
     out[1]=inserted;
     cb_stream_destroy(s);
+}
+#endif
+
+#ifdef CB_PROFILE_KERNELS
+/* Isolated operation timings are not additive: they lack the full draw's
+ * register pressure and branch interactions. All inputs come from a valid hull. */
+void profile_kernels(double chi,double nu,int n,double *out) {
+    cb_stream_t *s=cb_stream_create(0,0,1729,0,64);
+    cb_stream_set_stats(s,chi,nu);
+    s->eta_star=cb_mode(s->chi_eff,nu);
+    s->sigma=1/sqrt(nu*cb_bft_d2(s->eta_star));
+    s->buf_target=64;
+    build_hull_exact(s);
+    cb_hull_t *h=&s->hull;
+    double eta[1024],env[1024];int segment[1024];
+    for(int i=0;i<1024;++i)
+        segment[i]=hull_proposal_pre(&s->rng,h,&eta[i],&env[i]);
+    volatile double sink=0.0;
+    double total=0.0,start=seconds();
+    for(int i=0;i<n;++i) total+=cb_rng_uniform(&s->rng);
+    out[0]=(seconds()-start)/n;sink=total;
+    start=seconds();total=0.0;
+    for(int i=0;i<n;++i) {
+        double ep,en;hull_proposal_pre(&s->rng,h,&ep,&en);
+        total+=en;
+    }
+    out[1]=(seconds()-start)/n;sink=total;
+    start=seconds();total=0.0;
+    for(int i=0;i<n;++i) total+=log(cb_ars_uniform(&s->rng));
+    out[2]=(seconds()-start)/n;sink=total;
+    start=seconds();total=0.0;
+    for(int i=0;i<n;++i) {
+        int j=i&1023,seg=segment[j];double ep=eta[j];
+        int k=ep<h->pts[seg]?seg-1:seg;
+        if(ep>h->pts[0] && ep<h->pts[h->m-1]) {
+#if defined(CB_ARS_CHORD_CACHE) && CB_ARS_CHORD_CACHE
+            if(isfinite(h->chord_slopes[k]))
+                total+=h->fvals[k]+h->chord_slopes[k]*(ep-h->pts[k])-h->padding-env[j];
+            else
+#endif
+            {
+                double t=(ep-h->pts[k])/(h->pts[k+1]-h->pts[k]);
+                total+=(1-t)*h->fvals[k]+t*h->fvals[k+1]-h->padding-env[j];
+            }
+        }
+    }
+    out[3]=(seconds()-start)/n;sink=total;
+    start=seconds();total=0.0;
+    for(int i=0;i<n;++i) total+=target_log_f(s->chi_eff,nu,eta[i&1023]);
+    out[4]=(seconds()-start)/n;sink=total;
+    start=seconds();total=0.0;
+    for(int i=0;i<n;++i) total+=cb_exact_output(eta[i&1023]);
+    out[5]=(seconds()-start)/n;sink=total;
+    (void)sink;cb_stream_destroy(s);
 }
 #endif

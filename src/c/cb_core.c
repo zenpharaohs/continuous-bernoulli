@@ -109,6 +109,22 @@
 #else
 #define CB_ARS_COUNT(s,field) ((void)0)
 #endif
+/* Private build switches for performance ablations, not sampler policy. */
+#ifndef CB_ARS_CDF_MAX
+#define CB_ARS_CDF_MAX 7
+#endif
+#ifndef CB_ARS_CHORD_CACHE
+#define CB_ARS_CHORD_CACHE 1
+#endif
+#ifndef CB_ARS_INLINE
+#if defined(_MSC_VER)
+#define CB_ARS_INLINE static __forceinline
+#elif defined(__GNUC__) || defined(__clang__)
+#define CB_ARS_INLINE static inline __attribute__((always_inline))
+#else
+#define CB_ARS_INLINE static inline
+#endif
+#endif
 #define CB_ARS_BASE_HULL 9
 #define CB_CORE_K            5
 #define CB_CORE_U_MAX        8.0
@@ -180,6 +196,8 @@ typedef struct {
     double alias_prob[CB_ARS_MAX_HULL];
     int alias_idx[CB_ARS_MAX_HULL];
     double density_scale; /* nu, for the floating-point safety allowance */
+    double chord_slopes[CB_ARS_MAX_HULL]; /* finite chord cache; nonfinite uses interpolation */
+    double cdf[CB_ARS_MAX_HULL]; /* short hulls use cumulative selection */
     double padding; /* exact-hull roundoff allowance; not used by core hull */
     /* Exact hulls cache expm1(-abs(slope)*width) on finite segments.
      * Positive slopes invert from b; negative slopes invert from a. This
@@ -363,7 +381,7 @@ static double cb_bft_centered(double eta)
              +CB_BFT_R[2]/(1.0-CB_BFT_MU[2]*u));
 }
 
-static double target_log_f(double chi, double nu, double eta)
+CB_ARS_INLINE double target_log_f(double chi, double nu, double eta)
 {
     if (fabs(eta)<1.0)
         return fma(chi-.5*nu,eta,-nu*cb_bft_centered(eta));
@@ -570,10 +588,14 @@ static int exact_hull_tables(cb_hull_t *h)
     int small[CB_ARS_MAX_HULL],large[CB_ARS_MAX_HULL],ns=0,nl=0;
     for (int i=0;i<m;++i) { weights[i]=exp(h->logwts[i]-h->logZ);sum+=weights[i]; }
     if (!(sum>0.0) || !isfinite(sum)) return 0;
+    double cumulative=0.0;
     for (int i=0;i<m;++i) {
+        cumulative+=weights[i]/sum;
+        h->cdf[i]=cumulative<1.0 ? cumulative : 1.0;
         weights[i]*=(double)m/sum;
         if (weights[i]<1.0) small[ns++]=i; else large[nl++]=i;
     }
+    h->cdf[m-1]=1.0;
     while (ns && nl) {
         int j=small[--ns],k=large[--nl];
         h->alias_prob[j]=weights[j];h->alias_idx[j]=k;
@@ -582,6 +604,10 @@ static int exact_hull_tables(cb_hull_t *h)
     }
     while (ns) { int j=small[--ns];h->alias_prob[j]=1.0;h->alias_idx[j]=j; }
     while (nl) { int j=large[--nl];h->alias_prob[j]=1.0;h->alias_idx[j]=j; }
+    for (int i=0;i<m;++i) {
+        h->chord_slopes[i]=0.0;
+        if(i+1<m) h->chord_slopes[i]=(h->fvals[i+1]-h->fvals[i])/(h->pts[i+1]-h->pts[i]);
+    }
     return 1;
 }
 
@@ -701,13 +727,22 @@ static double cb_ars_uniform(cb_rng_t *rng)
     return u;
 }
 
-static int hull_proposal_pre(cb_rng_t *rng, const cb_hull_t *h,
+CB_ARS_INLINE int hull_proposal_pre(cb_rng_t *rng, const cb_hull_t *h,
                               double *eta_out, double *log_env_out)
 {
-    double u=cb_rng_uniform(rng)*(double)h->m;
-    int column=(int)u;
-    if (column>=h->m) column=h->m-1;
-    int seg=(u-column<h->alias_prob[column]) ? column : h->alias_idx[column];
+    double u=cb_rng_uniform(rng);
+    int seg;
+    /* A short cumulative scan is cheaper than alias indirection at m<=7.
+     * Refinement can grow m to 16; those hulls retain constant-time aliasing. */
+    if(h->m<=CB_ARS_CDF_MAX) {
+        seg=0;
+        while(seg<h->m-1 && u>=h->cdf[seg]) ++seg;
+    } else {
+        u*=h->m;
+        int column=(int)u;
+        if(column>=h->m)column=h->m-1;
+        seg=(u-column<h->alias_prob[column])?column:h->alias_idx[column];
+    }
     int m=h->m;
 
     double sl = h->slopes[seg];
@@ -1296,8 +1331,16 @@ static int draw_ars_batch(cb_stream_t *s, int n, double *out)
         int k=(ep<h->pts[seg]) ? seg-1 : seg;
         double log_sq=-INFINITY;
         if (ep>h->pts[0] && ep<h->pts[h->m-1]) {
-            double t=(ep-h->pts[k])/(h->pts[k+1]-h->pts[k]);
-            log_sq=(1.0-t)*h->fvals[k]+t*h->fvals[k+1]-h->padding-log_env;
+#if CB_ARS_CHORD_CACHE
+            if (isfinite(h->chord_slopes[k]))
+                log_sq=h->fvals[k]+h->chord_slopes[k]*(ep-h->pts[k])-h->padding-log_env;
+            else
+#endif
+            {
+                /* Retain stable interpolation when a cached slope overflows. */
+                double t=(ep-h->pts[k])/(h->pts[k+1]-h->pts[k]);
+                log_sq=(1.0-t)*h->fvals[k]+t*h->fvals[k+1]-h->padding-log_env;
+            }
         }
         int acc=log_u<=log_sq;
         if (acc) CB_ARS_COUNT(s,squeezes);

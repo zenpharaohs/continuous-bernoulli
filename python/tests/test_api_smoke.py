@@ -300,3 +300,4 @@ def test_exact_ars_numerical_envelopes(tmp_path):
     assert result['upper_defect']['upper_defect'] == 0
     assert result['lower_excess']['lower_excess'] == 0
     assert result['alias_mass_error']['alias_mass_error'] < 1e-14
+    assert result['cdf_mass_error']['cdf_mass_error'] < 1e-14
