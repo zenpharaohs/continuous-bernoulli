@@ -68,6 +68,17 @@ def run(n=16000):
  * coordinate, and exercise the same core/remainder components as the API. */
 int latent_draw(double chi, double nu, int n, double *out, int mixture) {
     cb_stream_t *s = cb_stream_create(1, 2, 1729, 0, 64);
+    if (mixture == 4) {
+        cb_stream_set_stats(s,chi,nu);
+        if (!validation_coarse_hull(s)) return 0;
+        double old_logZ=s->hull.logZ;
+        uint64_t old_insertions=s->ars_insertions;
+        if (cb_stream_draw(s,n,out)!=n || s->ars_insertions<=old_insertions ||
+            s->hull.m<=2 || s->hull.logZ>old_logZ+4*s->hull.padding) return 0;
+        if (s->reflect) for (int i=0;i<n;++i) out[i]=-out[i];
+        cb_stream_destroy(s);
+        return 5;
+    }
     if (mixture == 3) {
         cb_stream_set_stats(s, chi, nu);
         for (int i=0; i<n; ++i)
@@ -116,6 +127,29 @@ int latent_draw(double chi, double nu, int n, double *out, int mixture) {
     cb_stream_destroy(s);
     return status;
 }
+int adaptive_reuse(void) {
+    /* Invert xorshift64* to force a valid state whose next uniform is zero. */
+    cb_rng_t endpoint_rng={11013388057781577488ULL};
+    if (cb_rng_uniform(&endpoint_rng)!=0.0) return 0;
+    endpoint_rng.s=11013388057781577488ULL;
+    double open_u=cb_ars_uniform(&endpoint_rng);
+    if (!(open_u>0.0 && open_u<1.0)) return 0;
+    cb_stream_t *s=cb_stream_create(1,2,1729,0,64);
+    cb_stream_set_stats(s,2e-32,2);
+    if (!validation_coarse_hull(s)) return 0;
+    uint64_t insertions=s->ars_insertions;
+    double x;
+    if (cb_stream_draw(s,1,&x)!=1) return 0;
+    uint64_t setups=s->ars_setups;
+    for (int i=0;i<1024;++i) if (cb_stream_draw(s,1,&x)!=1) return 0;
+    if (s->ars_setups!=setups || s->ars_insertions<=insertions) return 0;
+    cb_hull_t saved=s->hull;
+    if (exact_hull_insert(s,&s->hull,s->hull.pts[0]) || memcmp(&saved,&s->hull,sizeof(saved))) return 0;
+    cb_stream_set_stats(s,7e-20,7);
+    if (cb_stream_draw(s,1,&x)!=1 || s->ars_setups!=setups+1) return 0;
+    cb_stream_destroy(s);
+    return 1;
+}
 int bounded_ars_failure(void) {
     const int counts[] = {1,7,65};
     for (int i=0; i<3; ++i) {
@@ -123,6 +157,7 @@ int bounded_ars_failure(void) {
         cb_stream_set_stats(s,2e-32,2);
         /* Test only: invalid numeric scale must propagate through either
          * buffered refill or the batch path without returning a sample. */
+        s->eta_star = NAN;
         s->sigma = NAN;
         double out[65];
         int status = cb_stream_draw(s,counts[i],out);
@@ -130,10 +165,11 @@ int bounded_ars_failure(void) {
         if (status != -1) return 0;
     }
     /* Exercise the finite proposal cap with valid weights but an envelope
-     * whose intercepts make every target and chord acceptance vanish. */
+     * whose target and chord evaluations are deliberately invalid. */
     cb_stream_t *s = cb_stream_create(1,2,1729,0,64);
     build_hull_exact(s);
-    for (int i=0;i<s->hull.m;++i) s->hull.intercepts[i] += 1e6;
+    s->chi_eff=NAN;
+    for (int i=0;i<s->hull.m;++i) s->hull.fvals[i]=NAN;
     double x;
     int status = draw_ars_batch(s,1,&x);
     cb_stream_destroy(s);
@@ -163,7 +199,7 @@ int bounded_failure(void) {
                 exports = ['cb_stream_create', 'cb_stream_destroy', 'cb_stream_peek',
                            'cb_stream_set_stats', 'cb_stream_draw']
                 if name == 'latent':
-                    exports += ['latent_draw', 'bounded_failure', 'bounded_ars_failure']
+                    exports += ['latent_draw', 'bounded_failure', 'bounded_ars_failure', 'adaptive_reuse']
                 # Clang targeting MSVC needs explicit exports. MinGW exports
                 # these symbols automatically and ignores this guarded block.
                 text = '#ifdef _MSC_VER\n' + ''.join(
@@ -223,11 +259,13 @@ int bounded_failure(void) {
                                       C.POINTER(C.c_double), C.c_int]
         assert latent.bounded_failure() == 1
         assert latent.bounded_ars_failure() == 1
+        assert latent.adaptive_reuse() == 1
         # Independent quadrature of exp(chi*eta-nu*log((exp(eta)-1)/eta))
         # in scaled negative eta. No core, mode solver, or C B function used.
         for gap, nu in [(1.874462168e-5, 594), (2.846340396e-5, 258),
                         (1e-10, 2), (.02, 2), (.01, 49), (2, 200),
-                        (7*3.8758505860895066e-32, 7), (7e-20, 7), (2e-32, 2)]:
+                        (7*3.8758505860895066e-32, 7), (7e-20, 7), (2e-32, 2),
+                        (7-np.nextafter(7.,0.),7), (2e-150,2), (1,1e6)]:
             for high in [False, True]:
                 # No double encodes the reflected interior counterpart when
                 # subtraction rounds to nu. Do not test an endpoint in its place.
@@ -238,7 +276,7 @@ int bounded_failure(void) {
                 center = -nu/rate
                 scale = np.sqrt(nu)/rate
                 def reference(size):
-                    upper = max(20., (nu + 45*rate/(nu-rate))/np.sqrt(nu))
+                    upper = min(40., max(20., (nu + 45*rate/(nu-rate))/np.sqrt(nu)))
                     grid = np.linspace(-40., upper, size)
                     eta = center + scale*grid
                     b = np.zeros_like(eta)
@@ -251,30 +289,40 @@ int bounded_failure(void) {
                     p = np.exp(logp-np.max(logp))
                     masses = .5*(p[:-1]+p[1:])*np.diff(grid)
                     cdf = np.r_[0., np.cumsum(masses)]
-                    cdf /= cdf[-1]
-                    return grid, cdf
+                    mass = cdf[-1]
+                    # Log concavity bounds each omitted tail by p/|log p'|.
+                    edges = eta[[0,-1]]
+                    q = np.exp(-np.abs(edges))
+                    bp = np.where(edges>0,1/(1-q),-q/(1-q))-1/edges
+                    slopes = scale*(rate-nu*bp)
+                    assert slopes[0]>0 and slopes[1]<0
+                    tail_bound = (p[0]/slopes[0]+p[-1]/(-slopes[1]))/mass
+                    assert tail_bound<1e-10
+                    cdf /= mass
+                    return grid, cdf, tail_bound
                 # Independently evaluated density and a convergence check;
                 # no C B function, mode solver, or core integral is used.
-                coarse_grid, coarse_cdf = reference(65537)
-                grid, cdf = reference(131073)
-                reference_error = np.max(np.abs(coarse_cdf-np.interp(coarse_grid, grid, cdf)))
+                coarse_grid, coarse_cdf, coarse_tail = reference(65537)
+                grid, cdf, fine_tail = reference(131073)
+                reference_error = np.max(np.abs(coarse_cdf-np.interp(coarse_grid, grid, cdf)))+max(coarse_tail,fine_tail)
                 if reference_error > 5e-7:
                     raise AssertionError(('endpoint CDF did not converge', reference_error))
                 paths = [0, 1, 2] if high and nu in (258, 594) else [0, 1]
                 if gap < 1e-18:
                     paths.append(3)
+                paths.append(4)
                 for mixture in paths:
                     draws = np.empty(n)
                     draw_started = time.monotonic()
                     status = latent.latent_draw(chi, nu, len(draws),
                             draws.ctypes.data_as(C.POINTER(C.c_double)), mixture)
-                    assert status in (1, 2, 3, 4), (chi, nu, mixture, status)
+                    assert status in (1, 2, 3, 4, 5), (chi, nu, mixture, status)
                     elapsed = max(time.monotonic()-draw_started, 1e-12)
                     assert np.all(np.isfinite(draws))
                     u = np.sort(np.interp((draws-center)/scale, grid, cdf))
                     idx = np.arange(1, n+1, dtype=float)
                     ks = float(max(np.max(idx/n-u), np.max(u-(idx-1)/n)))
-                    path = {1: 'ARS', 2: 'core/remainder', 3: 'live core buffer', 4: 'stream buffer'}[status]
+                    path = {1: 'ARS', 2: 'core/remainder', 3: 'live core buffer', 4: 'stream buffer', 5: 'adaptive rescue'}[status]
                     if status == 1 and mixture == 1:
                         path = 'ARS (core unavailable)'
                     label = f"eta gap={rate:.6g} nu={nu} {'high' if high else 'low'} {path}"

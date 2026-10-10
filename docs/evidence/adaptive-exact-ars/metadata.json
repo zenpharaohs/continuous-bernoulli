@@ -1,0 +1,11 @@
+{
+  "date": "2026-10-10T15:43:28.018647+00:00",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "baseline": "79bad31",
+  "compiler": "clang -O3 -shared -fPIC",
+  "source_sha256": "9985c4b17ccf871a864fd972d605d190153cfffa03dbbdca8bcb41470642feff",
+  "timing": "Median of three trials; timing uses uninstrumented builds; separate counters; envelope-only, excludes constructor/mode solve/core construction.",
+  "python_tests": "32 passed in 5.82s",
+  "matlab": "User-run actual MEX, 66 endpoint cases and 23 ordinary cases, QUICK PASSED"
+}

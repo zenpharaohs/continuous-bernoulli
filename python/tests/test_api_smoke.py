@@ -201,7 +201,7 @@ def test_python_validation_smoke():
     assert len(results) > 0
     assert all(r.passed for r in results)
     endpoints = [r for r in results if r.kind == "endpoint_eta"]
-    assert len(endpoints) == 35
+    assert len(endpoints) == 66
     assert any(r.path == "core/remainder" for r in endpoints)
     assert any(r.path == "live core buffer" for r in endpoints)
     assert any(r.chi > r.nu/2 for r in endpoints)
@@ -217,7 +217,7 @@ def test_python_validation_json_artifact(tmp_path):
     assert report['passed'] is True
     assert report['schema'] == 'cb_sampler.python_validation.v2'
     endpoints = [r for r in report['results'] if r['kind'] == 'endpoint_eta']
-    assert len(endpoints) == 35
+    assert len(endpoints) == 66
     assert sum(r['path'] == 'live core buffer' for r in endpoints) == 2
     assert all(r['reference_error'] <= 5e-7 for r in endpoints)
 
@@ -281,3 +281,22 @@ for chi,nu in states:
     env = os.environ.copy()
     env['PYTHONPATH'] = os.pathsep.join(map(str, sys.path))
     subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=5)
+
+
+def test_exact_ars_numerical_envelopes(tmp_path):
+    """Independent high-precision tangent, squeeze and alias regression."""
+    import json
+    import pathlib
+    import subprocess
+    import sys
+    if sys.platform == 'win32':
+        pytest.skip('The standalone Decimal audit harness uses a POSIX compiler.')
+    script = pathlib.Path(__file__).resolve().parents[2] / 'tools/exact_ars/analyze.py'
+    subprocess.run([sys.executable, str(script), '--sensitivity-only', '--quick',
+                    '--output', str(tmp_path)], check=True, timeout=30,
+                   stdout=subprocess.DEVNULL)
+    result = json.loads((tmp_path / 'sensitivity_summary.json').read_text())
+    assert result['hulls'] == 32
+    assert result['upper_defect']['upper_defect'] == 0
+    assert result['lower_excess']['lower_excess'] == 0
+    assert result['alias_mass_error']['alias_mass_error'] < 1e-14

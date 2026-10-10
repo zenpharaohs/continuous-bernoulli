@@ -31,7 +31,8 @@ eta_budget_cleanup = onCleanup(@() cb_stream_eta_mex('validation_budget', old_et
 
 states = [594-593.9999812553783, 594; 258-257.99997153659604, 258; ...
           1e-10, 2; .02, 2; .01, 49; 2, 200; ...
-          7*3.8758505860895066e-32,7; 7e-20,7; 2e-32,2];
+          7*3.8758505860895066e-32,7; 7e-20,7; 2e-32,2; ...
+          7-(7-eps(7)),7; 2e-150,2;1,1e6];
 R = struct('chi',{},'nu',{},'reflected',{},'path',{},'n',{}, ...
            'ks',{},'ks_limit',{},'reference_error',{},'passed',{});
 for c = 1:size(states,1)
@@ -45,6 +46,7 @@ for c = 1:size(states,1)
         paths = [0 1];
         if high && any(nu == [258 594]), paths = [0 1 2]; end
         if gap<1e-18, paths(end+1)=3; end
+        paths(end+1)=4;
         for path = paths
             [eta, description] = latent_draw(chi, nu, N, path, started);
             if high, eta = -eta; end % compare in the lower reflected coordinate
@@ -62,9 +64,10 @@ for c = 1:size(states,1)
         end
     end
 end
+adaptive_reuse(started);
 remainder_errors(started);
 fprintf('  MEX rejection budget and explicit remainder errors PASS\n');
-assert(numel(R)==35 && all([R.passed]), 'cb_validate:endpointDistribution', ...
+assert(numel(R)==66 && all([R.passed]), 'cb_validate:endpointDistribution', ...
        'Exact endpoint distribution qualification failed.');
 fprintf('  MATLAB/MEX endpoint qualification PASSED in %.2fs\n\n', toc(started));
 end
@@ -135,6 +138,23 @@ for c = 1:size(reported,1)
 end
 end
 
+function adaptive_reuse(started)
+ptr=cb_stream_eta_mex('create',2e-32,2,uint64(1729),uint64(0),64);
+cleanup=onCleanup(@() cb_stream_eta_mex('destroy',ptr)); %#ok<NASGU>
+cb_stream_eta_mex('validation_coarse_hull',ptr);
+initial=cb_stream_eta_mex('validation_ars',ptr);
+cb_stream_eta_mex('draw',ptr,1);
+before=cb_stream_eta_mex('validation_ars',ptr);
+for k=1:1024, cb_stream_eta_mex('draw',ptr,1); end
+after=cb_stream_eta_mex('validation_ars',ptr);
+assert(after(1)==before(1) && after(4)>initial(4),'Adaptive MEX hull was not reused.');
+cb_stream_eta_mex('set_stats',ptr,7e-20,7);
+cb_stream_eta_mex('draw',ptr,1);
+replaced=cb_stream_eta_mex('validation_ars',ptr);
+assert(replaced(1)==after(1)+1,'Replaced statistics reused a stale envelope.');
+check_time(started);
+end
+
 function [eta, description] = latent_draw(chi, nu, N, path, started)
 initial_chi = chi; initial_nu = nu;
 if path==2
@@ -143,7 +163,14 @@ if path==2
 end
 ptr = cb_stream_eta_mex('create',initial_chi,initial_nu,uint64(1729),uint64(0),64);
 cleanup = onCleanup(@() cb_stream_eta_mex('destroy',ptr)); %#ok<NASGU>
-if path==3
+if path==4
+    cb_stream_eta_mex('validation_coarse_hull',ptr);
+    before = cb_stream_eta_mex('validation_ars',ptr);
+    eta = cb_stream_eta_mex('draw',ptr,N);
+    after = cb_stream_eta_mex('validation_ars',ptr);
+    assert(before(7)==2 && after(7)>2 && after(4)>before(4));
+    description = 'adaptive rescue';
+elseif path==3
     eta = zeros(N,1);
     for k=1:N
         eta(k) = cb_stream_eta_mex('draw',ptr,1);
@@ -188,20 +215,27 @@ end
 function [grid,cdf,center,scale,err] = reference_cdf(rate,nu)
 % A coordinate choice from the tail density, not the C mode solver.
 center = -nu/rate; scale = sqrt(nu)/rate;
-upper = max(20,(nu+45*rate/(nu-rate))/sqrt(nu));
-[coarse_grid,coarse_cdf] = density_grid(65537,rate,nu,center,scale,upper);
-[grid,cdf] = density_grid(131073,rate,nu,center,scale,upper);
-err = max(abs(coarse_cdf-interp1(grid,cdf,coarse_grid,'linear')));
+upper = min(40,max(20,(nu+45*rate/(nu-rate))/sqrt(nu)));
+[coarse_grid,coarse_cdf,coarse_tail] = density_grid(65537,rate,nu,center,scale,upper);
+[grid,cdf,fine_tail] = density_grid(131073,rate,nu,center,scale,upper);
+err = max(abs(coarse_cdf-interp1(grid,cdf,coarse_grid,'linear')))+max(coarse_tail,fine_tail);
 assert(err<=5e-7, 'Independent MATLAB reference CDF did not converge.');
 end
 
-function [grid,cdf] = density_grid(count,rate,nu,center,scale,upper)
+function [grid,cdf,tail_bound] = density_grid(count,rate,nu,center,scale,upper)
 grid = linspace(-40,upper,count)'; eta = center+scale*grid;
 b = zeros(size(eta)); neg = eta<0; pos = eta>0;
 b(neg) = log(-expm1(eta(neg)))-log(-eta(neg));
 b(pos) = eta(pos)+log(-expm1(-eta(pos)))-log(eta(pos));
 lp = rate*eta-nu*b; p = exp(lp-max(lp));
-cdf = cumtrapz(grid,p); cdf = cdf/cdf(end);
+cdf = cumtrapz(grid,p); mass=cdf(end);
+edges=eta([1,end]); q=exp(-abs(edges)); bp=-q./(1-q)-1./edges;
+bp(edges>0)=1./(1-q(edges>0))-1./edges(edges>0);
+slopes=scale*(rate-nu*bp);
+assert(slopes(1)>0 && slopes(2)<0);
+tail_bound=(p(1)/slopes(1)+p(end)/(-slopes(2)))/mass;
+assert(tail_bound<1e-10,'Reference grid omitted too much probability.');
+cdf=cdf/mass;
 end
 
 function remainder_errors(started)

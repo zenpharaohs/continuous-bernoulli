@@ -31,6 +31,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
+#include <float.h>
 
 #include "include/cb_rng.h"
 #include "include/cb_bft.h"
@@ -93,9 +94,21 @@
  *   All PASS CF cases: kappa3=0 (Z=0.5 by symmetry).
  */
 #define CB_CF_SKEW_MAX       0.006  /* max |kappa3|/sqrt(nu) for CF regime */
-#define CB_ARS_OVERBOOK  1.3
-#define CB_ARS_MIN_BATCH 32
-#define CB_ARS_MAX_HULL  9
+#define CB_ARS_MAX_HULL  16
+#ifndef CB_ARS_ADAPTIVE
+#define CB_ARS_ADAPTIVE 1
+#endif
+#ifndef CB_ARS_SHAPE_INIT
+#define CB_ARS_SHAPE_INIT 1
+#endif
+#ifdef CB_VALIDATE_ETA
+#define CB_ARS_DIAGNOSTICS 1
+#endif
+#ifdef CB_ARS_DIAGNOSTICS
+#define CB_ARS_COUNT(s,field) (++(s)->ars_##field)
+#else
+#define CB_ARS_COUNT(s,field) ((void)0)
+#endif
 #define CB_ARS_BASE_HULL 9
 #define CB_CORE_K            5
 #define CB_CORE_U_MAX        8.0
@@ -164,17 +177,16 @@ typedef struct {
     double zpts  [CB_ARS_MAX_HULL-1];
     double logwts[CB_ARS_MAX_HULL];
     double logZ;
-    /* Precomputed expm1(s*(b-a)) per middle segment (seg 1..m-2).
-     * sample_trunc_exp for a middle segment computes:
-     *   ep = a + log1p(u * expm1(s*(b-a))) / s   [s > 0]
-     *   ep = a + log1p(-u * (-expm1(s*(b-a)))) / s  [s < 0]
-     * The expm1(s*(b-a)) term depends only on hull geometry, not on u.
-     * Precomputing it saves one expm1 call on every middle-segment proposal.
-     * Indices: exm1[i] = expm1(slopes[i] * (zpts[i] - zpts[i-1]))
-     * Valid for i = 1..m-2 (middle segments).  i=0 and i=m-1 are tails
-     * (semi-infinite intervals) and do not use expm1 in their CDF inversion.
-     */
-    double exm1 [CB_ARS_MAX_HULL];   /* expm1(s*(b-a)) per segment          */
+    double alias_prob[CB_ARS_MAX_HULL];
+    int alias_idx[CB_ARS_MAX_HULL];
+    double density_scale; /* nu, for the floating-point safety allowance */
+    double padding; /* exact-hull roundoff allowance; not used by core hull */
+    /* Exact hulls cache expm1(-abs(slope)*width) on finite segments.
+     * Positive slopes invert from b; negative slopes invert from a. This
+     * avoids positive exponential overflow. The finite core hull retains
+     * expm1(slope*width) for sample_trunc_exp's signed convention.
+     * Only indices 1..m-2 use the cache; the outer segments are tails. */
+    double exm1 [CB_ARS_MAX_HULL];   /* inversion cache; see convention above */
 } cb_hull_t;
 
 /* Transported-core rectangle/alias table over standardized u. */
@@ -245,6 +257,10 @@ typedef struct {
     double  *buf;
     int      buf_capacity, buf_pos, buf_filled, buf_kind;
     uint64_t total_draws, total_refills;
+#ifdef CB_ARS_DIAGNOSTICS
+    uint64_t ars_setups, ars_evaluations, ars_proposals, ars_rejections;
+    uint64_t ars_insertions, ars_insertion_failures, ars_squeezes;
+#endif
     uint64_t hull_rebuilds;      /* diagnostic: how many times hull was built  */
     uint64_t draws_since_rebuild;/* draws served since last build_hull() call  */
     int      buf_target;         /* adaptive fill size for next do_refill()    */
@@ -339,9 +355,29 @@ static double logsumexp(const double *v, int n)
  * Derivation: B''=R(eta^2) => B'''=2*eta*R'(eta^2), Horner in eta^2.
  * Accuracy: ~4e-16 vs ~4e-14 for 5-point FD at optimal h. */
 
+static double cb_bft_centered(double eta)
+{
+    double u=eta*eta;
+    return u*(CB_BFT_R[0]/(1.0-CB_BFT_MU[0]*u)
+             +CB_BFT_R[1]/(1.0-CB_BFT_MU[1]*u)
+             +CB_BFT_R[2]/(1.0-CB_BFT_MU[2]*u));
+}
+
 static double target_log_f(double chi, double nu, double eta)
 {
+    if (fabs(eta)<1.0)
+        return fma(chi-.5*nu,eta,-nu*cb_bft_centered(eta));
     return chi * eta - nu * cb_bft(eta);
+}
+
+static double target_log_slope(double chi,double nu,double eta)
+{
+    if (fabs(eta)<1.0) {
+        double u=eta*eta,Q=CB_BFT_D1[6];
+        for (int i=5;i>=0;--i) Q=fma(Q,u,CB_BFT_D1[i]);
+        return fma(-nu,eta*Q,chi-.5*nu);
+    }
+    return chi-nu*cb_bft_d1(eta);
 }
 
 /* The tangent intercept is nu*(eta*B'(eta)-B(eta)); chi cancels.
@@ -351,6 +387,11 @@ static double target_log_f(double chi, double nu, double eta)
 static double target_tangent_intercept(double nu, double eta)
 {
     double a = fabs(eta);
+    if (a<1.0) {
+        double u=eta*eta, Q=CB_BFT_D1[6];
+        for (int i=5;i>=0;--i) Q=fma(Q,u,CB_BFT_D1[i]);
+        return nu*(u*Q-cb_bft_centered(eta));
+    }
     if (a > 32.0) {
         double q = exp(-a);
         return nu * (log(a) - 1.0 + a*q/(1.0-q) - log1p(-q));
@@ -397,6 +438,7 @@ static double logdiffexp(double a, double b)
 
 static double sample_trunc_exp(cb_rng_t *r, double s, double a, double b);
 
+#if !CB_ARS_SHAPE_INIT
 static void hull_offsets(double sigma, int *m_out, double *offsets)
 {
     if (sigma <= 1.5) {
@@ -414,55 +456,215 @@ static void hull_offsets(double sigma, int *m_out, double *offsets)
     }
 }
 
-static void build_hull_exact(cb_stream_t *s)
+#endif
+
+/* log(1+x)-x without cancellation in the concentrated tail. */
+static double cb_log1pmx(double x)
 {
-    double chi = s->chi_eff, nu = s->nu;  /* chi_eff: low-Z always */
-    double eta_star = s->eta_star, sigma = s->sigma;
-
-    int m;
-    double offsets[CB_ARS_BASE_HULL];
-    hull_offsets(sigma, &m, offsets);
-
-    cb_hull_t *h = &s->hull;
-    h->m = m;
-    for (int i = 0; i < m; i++) {
-        h->pts[i]    = eta_star + sigma * offsets[i];
-        h->fvals[i]  = chi * h->pts[i] - nu * cb_bft(h->pts[i]);
-        h->slopes[i] = chi - nu * cb_bft_d1(h->pts[i]);
-        h->intercepts[i] = target_tangent_intercept(nu, h->pts[i]);
+    if (fabs(x) >= .01) return log1p(x)-x;
+    double term = x*x, sum = -.5*term;
+    for (int k=3; k<=12; ++k) {
+        term *= -x;
+        sum -= term/(double)k;
     }
-    for (int i = 0; i < m-1; i++) {
-        double ds = h->slopes[i] - h->slopes[i+1];
-        h->zpts[i] = (ds == 0.0)
-            ? 0.5*(h->pts[i] + h->pts[i+1])
-            : (h->intercepts[i+1] - h->intercepts[i]) / ds;
-    }
-    /* Precompute exm1[i] = expm1(slopes[i] * (zpts[i] - zpts[i-1]))
-     * for middle segments i = 1..m-2.  Used in draw_ars_batch to avoid
-     * recomputing expm1(s*(b-a)) on every proposal from that segment.
-     * Tail segments (i=0, i=m-1) are semi-infinite; their CDF inversions
-     * use log(u) and log1p(-u) respectively -- no expm1 involved. */
-    for (int i = 1; i < m-1; i++)
-        h->exm1[i] = expm1(h->slopes[i] * (h->zpts[i] - h->zpts[i-1]));
-
-    h->logwts[0]   = h->intercepts[0] + h->slopes[0]*h->zpts[0]
-                     - log( h->slopes[0]);
-    h->logwts[m-1] = h->intercepts[m-1] + h->slopes[m-1]*h->zpts[m-2]
-                     - log(-h->slopes[m-1]);
-    for (int i = 1; i < m-1; i++)
-        h->logwts[i] = log_seg_wt(h->intercepts[i], h->slopes[i], 0.0,
-                                   h->zpts[i-1], h->zpts[i]);
-    h->logZ = logsumexp(h->logwts, m);
-
-    /* Reset draw counter for adaptive sizing. */
-    s->hull_valid          = 1;
-    s->hull_rebuilds++;
-    s->draws_since_rebuild = 0;
-    s->buf_target          = CB_DEFAULT_BUF;  /* restart conservative after rebuild */
+    return sum;
 }
 
-static void build_hull(cb_stream_t *s)
+static double target_relative(cb_stream_t *s, double eta)
 {
+    CB_ARS_COUNT(s, evaluations);
+    double mode = s->eta_star, chi = s->chi_eff, nu = s->nu;
+    if (mode < -32.0 && eta < -32.0) {
+        double x = (eta-mode)/mode;
+        return fma(fma(chi,mode,nu),x,nu*cb_log1pmx(x))
+             - nu*(log1p(-exp(eta))-log1p(-exp(mode)));
+    }
+    if (fabs(eta)<1.0 && fabs(mode)<1.0)
+        return fma(chi-.5*nu,eta-mode,-nu*(cb_bft_centered(eta)-cb_bft_centered(mode)));
+    return chi*(eta-mode)-nu*(cb_bft(eta)-cb_bft(mode));
+}
+
+/* Point placement need only approximate the requested drop. Tangents at
+ * every returned point are still valid; no density approximation is used. */
+static double hull_drop_point(cb_stream_t *s, double sign, double drop)
+{
+    /* Tail geometry in log(-eta/mode) gives cheap asymmetric points.
+     * Its exponential correction affects placement only, never acceptance. */
+    if (s->eta_star<-32.0) {
+        double r=drop/s->nu;
+        double y=sign<0.0 ? log1p(r+sqrt(2.0*r)) : -sqrt(2.0*r)-r/3.0;
+        for (int k=0;k<8;++k) {
+            double e=expm1(y), f=y-e+r;
+            if (fabs(f)<.01*r) break;
+            double next=y+f/e;
+            if (!isfinite(next) || (sign<0.0 ? next<=0.0 : next>=0.0)) break;
+            y=next;
+        }
+        double point=s->eta_star*exp(y);
+        if (isfinite(point) && point<-32.0) return point;
+    }
+    double guess=sqrt(2.0*drop);
+    for (int k=0;k<3;++k) {
+        double eta=s->eta_star+sign*s->sigma*guess;
+        double f=target_relative(s,eta);
+        if (isfinite(f) && fabs(f+drop)<.01*drop) return eta;
+        double derivative=sign*s->sigma*(target_log_slope(s->chi_eff,s->nu,eta));
+        double next=guess-(f+drop)/derivative;
+        if (!isfinite(next) || !(next>0.0)) break;
+        guess=next;
+    }
+    double lo=0.0, hi=sqrt(2.0*drop), v=hi, f;
+    f=target_relative(s,s->eta_star+sign*s->sigma*hi);
+    if (isfinite(f) && fabs(f+drop)<.05*drop)
+        return s->eta_star+sign*s->sigma*hi;
+    for (int k=0; k<32; ++k) {
+        f=target_relative(s,s->eta_star+sign*s->sigma*hi);
+        if (!isfinite(f) || f <= -drop) break;
+        hi *= 2.0;
+    }
+    v=hi;
+    for (int k=0; k<24; ++k) {
+        double eta=s->eta_star+sign*s->sigma*v;
+        f=target_relative(s,eta);
+        if (isfinite(f) && fabs(f+drop) < .01*drop) break;
+        if (isfinite(f) && f > -drop) lo=v; else hi=v;
+        double derivative=sign*s->sigma*(target_log_slope(s->chi_eff,s->nu,eta));
+        double next=v-(f+drop)/derivative;
+        v=(isfinite(next) && next>lo && next<hi &&
+            (fabs(f+drop)<.1*drop || (next>lo+.1*(hi-lo) && next<hi-.1*(hi-lo))))
+            ? next : .5*(lo+hi);
+    }
+    return s->eta_star+sign*s->sigma*v;
+}
+
+/* Refresh an exact posterior tangent hull. Common padding raises every
+ * tangent equally, retaining its segment intersections and proposal shape.
+ * It protects against small roundoff defects, rather than changing f. */
+static int exact_hull_tables(cb_hull_t *h)
+{
+    int m=h->m;
+    double magnitude=0.0;
+    if (m<2 || !(h->slopes[0]>0.0) || !(h->slopes[m-1]<0.0)) return 0;
+    for (int i=0;i<m;++i) {
+        if (!isfinite(h->pts[i]) || !isfinite(h->fvals[i]) ||
+            !isfinite(h->intercepts[i]) || !isfinite(h->slopes[i])) return 0;
+        if (fabs(h->intercepts[i])>magnitude) magnitude=fabs(h->intercepts[i]);
+        if (i+1<m) {
+            double ds=h->slopes[i]-h->slopes[i+1];
+            if (!(ds>0.0) || !(h->pts[i+1]>h->pts[i])) return 0;
+            h->zpts[i]=(h->intercepts[i+1]-h->intercepts[i])/ds;
+            if (!isfinite(h->zpts[i]) || h->zpts[i]<h->pts[i] ||
+                h->zpts[i]>h->pts[i+1] || (i && h->zpts[i]<=h->zpts[i-1])) return 0;
+        }
+    }
+    h->padding=64.0*DBL_EPSILON*(1.0+h->density_scale+magnitude);
+    for (int i=1;i<m-1;++i)
+        h->exm1[i]=expm1(-fabs(h->slopes[i])*(h->zpts[i]-h->zpts[i-1]));
+    h->logwts[0]=h->intercepts[0]+h->padding+h->slopes[0]*h->zpts[0]-log(h->slopes[0]);
+    h->logwts[m-1]=h->intercepts[m-1]+h->padding+h->slopes[m-1]*h->zpts[m-2]-log(-h->slopes[m-1]);
+    for (int i=1;i<m-1;++i)
+        h->logwts[i]=log_seg_wt(h->intercepts[i]+h->padding,h->slopes[i],0.0,h->zpts[i-1],h->zpts[i]);
+    h->logZ=logsumexp(h->logwts,m);
+    if (!isfinite(h->logZ)) return 0;
+    double weights[CB_ARS_MAX_HULL], sum=0.0;
+    int small[CB_ARS_MAX_HULL],large[CB_ARS_MAX_HULL],ns=0,nl=0;
+    for (int i=0;i<m;++i) { weights[i]=exp(h->logwts[i]-h->logZ);sum+=weights[i]; }
+    if (!(sum>0.0) || !isfinite(sum)) return 0;
+    for (int i=0;i<m;++i) {
+        weights[i]*=(double)m/sum;
+        if (weights[i]<1.0) small[ns++]=i; else large[nl++]=i;
+    }
+    while (ns && nl) {
+        int j=small[--ns],k=large[--nl];
+        h->alias_prob[j]=weights[j];h->alias_idx[j]=k;
+        weights[k]-=1.0-weights[j];
+        if (weights[k]<1.0) small[ns++]=k; else large[nl++]=k;
+    }
+    while (ns) { int j=small[--ns];h->alias_prob[j]=1.0;h->alias_idx[j]=j; }
+    while (nl) { int j=large[--nl];h->alias_prob[j]=1.0;h->alias_idx[j]=j; }
+    return 1;
+}
+
+/* A rejected point supplies a new supporting tangent to the SAME full
+ * posterior. For a remainder draw the subtraction and mixture stay fixed.
+ * Reject a numerically ill-conditioned insertion, retaining the old hull. */
+static int exact_hull_insert(cb_stream_t *s, cb_hull_t *h, double eta)
+{
+#if CB_ARS_ADAPTIVE
+    if (h->m>=CB_ARS_MAX_HULL || !isfinite(eta) || !isfinite(s->chi_eff)) return 0;
+    if (target_relative(s,eta)<-50.0) return 0;
+    int j=0;
+    while (j<h->m && h->pts[j]<eta) ++j;
+    double separation=1e-8*s->sigma;
+    if ((j<h->m && fabs(eta-h->pts[j])<=separation) ||
+        (j && fabs(eta-h->pts[j-1])<=separation)) return 0;
+    cb_hull_t candidate=*h;
+    for (int i=candidate.m;i>j;--i) {
+        candidate.pts[i]=candidate.pts[i-1];
+        candidate.fvals[i]=candidate.fvals[i-1];
+        candidate.intercepts[i]=candidate.intercepts[i-1];
+        candidate.slopes[i]=candidate.slopes[i-1];
+    }
+    candidate.pts[j]=eta;
+    candidate.fvals[j]=target_log_f(s->chi_eff,s->nu,eta);
+    candidate.slopes[j]=target_log_slope(s->chi_eff,s->nu,eta);
+    candidate.intercepts[j]=target_tangent_intercept(s->nu,eta);
+    ++candidate.m;
+    CB_ARS_COUNT(s, evaluations);
+    if (!exact_hull_tables(&candidate)) { CB_ARS_COUNT(s, insertion_failures); return 0; }
+    *h=candidate;
+    CB_ARS_COUNT(s, insertions);
+    return 1;
+#else
+    (void)s; (void)h; (void)eta;
+    return 0;
+#endif
+}
+
+static void build_hull_exact(cb_stream_t *s)
+{
+    CB_ARS_COUNT(s, setups);
+    cb_hull_t *h=&s->hull;
+    h->density_scale=s->nu;
+#if CB_ARS_SHAPE_INIT
+    if (s->buf_target<=4) {
+        /* Repeated replacements often consume only one draw. Two shape
+         * points plus the mode avoid paying for a large throwaway hull. */
+        h->m=3;
+        h->pts[0]=hull_drop_point(s,-1.0,2.0);
+        h->pts[1]=s->eta_star;
+        h->pts[2]=hull_drop_point(s,1.0,2.0);
+    } else {
+        static const double drops[3]={.5,2.0,5.0};
+        h->m=7;
+        h->pts[3]=s->eta_star;
+        for (int k=0;k<3;++k) {
+            h->pts[2-k]=hull_drop_point(s,-1.0,drops[k]);
+            h->pts[4+k]=hull_drop_point(s,1.0,drops[k]);
+        }
+    }
+#else
+    double offsets[CB_ARS_BASE_HULL];
+    hull_offsets(s->sigma,&h->m,offsets);
+    for (int i=0;i<h->m;++i) h->pts[i]=s->eta_star+s->sigma*offsets[i];
+#endif
+    for (int i=0;i<h->m;++i) {
+        h->fvals[i]=target_log_f(s->chi_eff,s->nu,h->pts[i]);
+        h->slopes[i]=target_log_slope(s->chi_eff,s->nu,h->pts[i]);
+        h->intercepts[i]=target_tangent_intercept(s->nu,h->pts[i]);
+        CB_ARS_COUNT(s, evaluations);
+    }
+    s->hull_valid=exact_hull_tables(h);
+    if (!s->hull_valid) h->logZ=NAN;
+    s->hull_rebuilds++;
+    s->draws_since_rebuild=0;
+    s->buf_target=CB_DEFAULT_BUF;
+}
+
+static void build_hull(cb_stream_t *s,int n_hint)
+{
+    if (n_hint>s->buf_target)
+        s->buf_target=n_hint<s->buf_capacity ? n_hint : s->buf_capacity;
     build_hull_exact(s);
 }
 
@@ -490,33 +692,39 @@ static int binom_wait2_rem(cb_rng_t *rng, int n, double p)
     return flip ? (n - k) : k;
 }
 
-static void hull_proposal_pre(cb_stream_t *s, const double *probs, double sum,
+/* The base RNG includes zero. Logarithmic inversions and acceptance need
+ * an open uniform; redraw the endpoint rather than producing infinite eta. */
+static double cb_ars_uniform(cb_rng_t *rng)
+{
+    double u;
+    do { u=cb_rng_uniform(rng); } while (u==0.0);
+    return u;
+}
+
+static int hull_proposal_pre(cb_rng_t *rng, const cb_hull_t *h,
                               double *eta_out, double *log_env_out)
 {
-    const cb_hull_t *h = &s->hull;
-    int m = h->m;
-    double u = cb_rng_uniform(&s->rng) * sum;
-    double cdf = 0.0;
-    int seg = m - 1;
-    for (int i = 0; i < m-1; i++) {
-        cdf += probs[i];
-        if (u <= cdf) { seg = i; break; }
-    }
+    double u=cb_rng_uniform(rng)*(double)h->m;
+    int column=(int)u;
+    if (column>=h->m) column=h->m-1;
+    int seg=(u-column<h->alias_prob[column]) ? column : h->alias_idx[column];
+    int m=h->m;
 
     double sl = h->slopes[seg];
     double intercept = h->intercepts[seg];
     double a  = (seg == 0)   ? -INFINITY : h->zpts[seg-1];
     double b  = (seg == m-1) ?  INFINITY : h->zpts[seg];
-    double u2 = cb_rng_uniform(&s->rng);
+    double u2 = cb_ars_uniform(rng);
     double ep;
     if (seg == 0) ep = b + log(u2) / sl;
     else if (seg == m-1) ep = a + log1p(-u2) / sl;
     else if (sl == 0.0) ep = a + u2 * (b - a);
-    else if (sl > 0.0) ep = a + log1p( u2 *  h->exm1[seg]) / sl;
-    else ep = a + log1p(-u2 * (-h->exm1[seg])) / sl;
+    else if (sl > 0.0) ep = b + log1p((1.0-u2)*h->exm1[seg]) / sl;
+    else ep = a + log1p(u2*h->exm1[seg]) / sl;
 
     *eta_out = ep;
-    *log_env_out = intercept + sl * ep;
+    *log_env_out = intercept + sl * ep + h->padding;
+    return seg;
 }
 
 static double core_anchor_log_shape(const cb_stream_t *s, int a, double u)
@@ -1070,117 +1278,46 @@ static void draw_cf_batch(cb_stream_t *s, int n, double *out)
 
 static int draw_ars_batch(cb_stream_t *s, int n, double *out)
 {
-    /* Lazy hull rebuild: if the table is invalid, build it now before drawing.
-     * This is the ONLY place build_hull() is called -- never in update().
-     * s->chi_eff and s->eta_star already reflect the low-Z parameterisation
-     * set by determine_regime() -- see reflection logic there. */
-    if (!s->hull_valid) {
-        build_hull(s);
-    }
-    /* Count draws against this hull for adaptive buffer sizing.
-     * buf_target for the NEXT refill grows toward buf_capacity as long
-     * as the hull remains valid, resetting to CB_DEFAULT_BUF on rebuild. */
+    if (!s->hull_valid) build_hull(s,n);
     s->draws_since_rebuild += (uint64_t)n;
-    {
-        int next = (int)(s->draws_since_rebuild) + CB_DEFAULT_BUF;
-        s->buf_target = (next < s->buf_capacity) ? next : s->buf_capacity;
-    }
-
-    const cb_hull_t *h = &s->hull;
-    double chi = s->chi_eff, nu = s->nu;  /* chi_eff: low-Z always */
-    int m = h->m, drawn = 0;
-
-    /* Precompute segment probabilities once per batch */
-    double probs[CB_ARS_MAX_HULL];
-    {
-        double mx = h->logwts[0];
-        for (int i = 1; i < m; i++) if (h->logwts[i] > mx) mx = h->logwts[i];
-        double sum = 0.0;
-        for (int i = 0; i < m; i++) { probs[i] = exp(h->logwts[i] - mx); sum += probs[i]; }
-        if (!(sum > 0.0) || !isfinite(sum)) return 0;
-        for (int i = 0; i < m; i++) probs[i] /= sum;
-    }
-
-    uint64_t proposals = 0;
-    while (drawn < n) {
+    uint64_t next=s->draws_since_rebuild+CB_DEFAULT_BUF;
+    s->buf_target=next<(uint64_t)s->buf_capacity ? (int)next : s->buf_capacity;
+    cb_hull_t *h=&s->hull;
+    if (!isfinite(h->logZ)) return 0;
+    int drawn=0, streak=0;
+    uint64_t proposals=0, window_start=0, window_rejections=0;
+    while (drawn<n) {
         CB_DRAW_CHECK();
-        int need  = n - drawn;
-        int batch = (int)(CB_ARS_OVERBOOK * need);
-        if (batch < CB_ARS_MIN_BATCH) batch = CB_ARS_MIN_BATCH;
-
-        for (int b = 0; b < batch && drawn < n; b++) {
-            CB_DRAW_CHECK();
-            /* Numerical envelope failures must propagate, never spin forever
-             * or substitute a sample from a different distribution. */
-            if (++proposals > 1000000ULL * (uint64_t)n) return 0;
-            double u = cb_rng_uniform(&s->rng);
-            double cdf = 0.0;
-            int seg = m - 1;
-            for (int i = 0; i < m-1; i++) {
-                cdf += probs[i];
-                if (u <= cdf) { seg = i; break; }
-            }
-
-            double sl  = h->slopes[seg];
-            double intercept = h->intercepts[seg];
-            double a   = (seg == 0)   ? -INFINITY : h->zpts[seg-1];
-            double bv  = (seg == m-1) ?  INFINITY  : h->zpts[seg];
-
-            /* Generate proposal ep from the piecewise-exponential envelope.
-             * Tail segments (seg=0, seg=m-1) use the generic inversion.
-             * Middle segments use the precomputed exm1[seg] = expm1(s*(b-a))
-             * to avoid recomputing it on every proposal. */
-            double ep;
-            if (seg == 0) {
-                /* Left tail: s > 0, a = -inf  =>  ep = bv + log(u2)/sl */
-                double u2 = cb_rng_uniform(&s->rng);
-                ep = bv + log(u2) / sl;
-            } else if (seg == m-1) {
-                /* Right tail: s < 0, b = +inf  =>  ep = a + log1p(-u2)/sl */
-                double u2 = cb_rng_uniform(&s->rng);
-                ep = a + log1p(-u2) / sl;
-            } else {
-                /* Middle segment: use precomputed exm1[seg] = expm1(s*(b-a)).
-                 * A truly zero slope uses uniform inversion. Small nonzero
-                 * slopes must retain the exponential: endpoint-adjacent
-                 * segments can be very wide. The center point sits at
-                 * the posterior mode where slope = chi - nu*B'(eta*) = 0 by
-                 * definition.  Fall back to uniform over [a,bv] -- same as
-                 * the original sample_trunc_exp() for the zero-slope case. */
-                double u2 = cb_rng_uniform(&s->rng);
-                if (sl == 0.0)
-                    ep = a + u2 * (bv - a);
-                else if (sl > 0.0)
-                    ep = a + log1p( u2 *  h->exm1[seg]) / sl;
-                else
-                    ep = a + log1p(-u2 * (-h->exm1[seg])) / sl;
-            }
-            double log_env = intercept + sl * ep;
-            double log_u   = log(cb_rng_uniform(&s->rng));
-
-            /* Chord squeeze */
-            int k = 0;
-            while (k < m-1 && ep > h->pts[k+1]) k++;
-            double log_sq = -INFINITY;
-            if (ep > h->pts[0] && ep < h->pts[m-1]) {
-                double dp = h->pts[k+1] - h->pts[k];
-                double df = h->fvals[k+1] - h->fvals[k];
-                log_sq = h->fvals[k] + (df/dp)*(ep - h->pts[k]) - log_env;
-            }
-
-            int acc;
-            if (log_u <= log_sq) {
-                acc = 1;
-            } else {
-                double log_acc = chi*ep - nu*cb_bft(ep) - log_env;
-                if (log_acc > 0.0) log_acc = 0.0;
-                acc = (log_u <= log_acc);
-            }
-
-            if (acc) {
-                double th = cb_exact_output(ep);
-                out[drawn++] = th;
-            }
+        if (++proposals>1000000ULL*(uint64_t)n) return 0;
+        CB_ARS_COUNT(s,proposals);
+        double ep,log_env;
+        int seg=hull_proposal_pre(&s->rng,h,&ep,&log_env);
+        double log_u=log(cb_ars_uniform(&s->rng));
+        int k=(ep<h->pts[seg]) ? seg-1 : seg;
+        double log_sq=-INFINITY;
+        if (ep>h->pts[0] && ep<h->pts[h->m-1]) {
+            double t=(ep-h->pts[k])/(h->pts[k+1]-h->pts[k]);
+            log_sq=(1.0-t)*h->fvals[k]+t*h->fvals[k+1]-h->padding-log_env;
+        }
+        int acc=log_u<=log_sq;
+        if (acc) CB_ARS_COUNT(s,squeezes);
+        else {
+            CB_ARS_COUNT(s,evaluations);
+            double lf=target_log_f(s->chi_eff,s->nu,ep);
+            double log_acc=lf-log_env;
+            if (log_acc>0.0) log_acc=0.0;
+            acc=log_u<=log_acc;
+        }
+        if (acc) {
+            out[drawn++]=cb_exact_output(ep);
+            streak=0;
+        } else {
+            ++streak;
+            ++window_rejections;
+            CB_ARS_COUNT(s,rejections);
+            int inefficient=window_rejections>=8 && window_rejections*8>proposals-window_start;
+            if ((inefficient && (n-drawn>=256 || s->draws_since_rebuild>=256)) || streak>=4)
+                if (exact_hull_insert(s,h,ep)) { window_start=proposals;window_rejections=0; }
         }
     }
     return 1;
@@ -1312,13 +1449,10 @@ static int draw_remainder_batch(cb_stream_t *s, int n, double *out)
         log_sub_const = s->rem_log_sub_const;
     }
 
-    const cb_hull_t *h = &s->rem_hull;
-    double probs[CB_ARS_MAX_HULL];
-    double mx = h->logwts[0], sum = 0.0;
-    for (int i = 1; i < h->m; i++) if (h->logwts[i] > mx) mx = h->logwts[i];
-    for (int i = 0; i < h->m; i++) { probs[i] = exp(h->logwts[i] - mx); sum += probs[i]; }
+    cb_hull_t *h = &s->rem_hull;
+    if (!isfinite(h->logZ)) return 0;
 
-    int drawn = 0;
+    int drawn = 0, streak = 0;
     uint64_t proposals = 0;
     while (drawn < n) {
         CB_DRAW_CHECK();
@@ -1326,16 +1460,26 @@ static int draw_remainder_batch(cb_stream_t *s, int n, double *out)
          * replace a selected remainder with a draw from another density. */
         if (++proposals > 1000000ULL * (uint64_t)n) return 0;
         double eta, log_env;
-        hull_proposal_pre(s, probs, sum, &eta, &log_env);
+        CB_ARS_COUNT(s,proposals);
+        hull_proposal_pre(&s->rng,h,&eta,&log_env);
+        CB_ARS_COUNT(s,evaluations);
         double lf = target_log_f(chi, nu, eta);
         double u = (eta - s->eta_star) / s->sigma;
         double ls = core_log_shape(s, u);
         double lr = isfinite(ls) ? logdiffexp(lf, log_sub_const + ls) : lf;
         double log_acc = lr - log_env;
         if (log_acc > 0.0) log_acc = 0.0;
-        if (log(cb_rng_uniform(&s->rng)) <= log_acc) {
+        if (log(cb_ars_uniform(&s->rng)) <= log_acc) {
             double th = cb_exact_output(eta);
             out[drawn++] = th;
+            streak=0;
+        } else {
+            ++streak;
+            CB_ARS_COUNT(s,rejections);
+            /* Tighten only when the full-density bound has slack. Low
+             * remainder mass alone is not an envelope construction fault. */
+            if (log_env-lf>.05 && (n-drawn>=256 || streak>=4))
+                exact_hull_insert(s,h,eta);
         }
     }
     s->remainder_draws += (uint64_t)n;
@@ -1377,9 +1521,7 @@ static int do_refill(cb_stream_t *s, int n_hint)
             draw_core_batch(s, n, s->buf);
             s->buf_kind = CB_BUF_CORE_U;
         } else {
-            build_hull_exact(s);
             if (!draw_ars_batch(s, n, s->buf)) return 0;
-            s->hull_valid = 0;
             s->buf_kind = CB_BUF_THETA;
         }
         break;
@@ -1441,12 +1583,10 @@ static int draw_current_batch(cb_stream_t *s, int n, double *out)
         draw_cf_batch(s, n, out);
         break;
     case CB_REGIME_ARS:
-        build_hull_exact(s);
         if (!draw_ars_batch(s, n, out)) return 0;
         if (s->reflect) {
             for (int i = 0; i < n; i++) out[i] = cb_reflect_output(out[i]);
         }
-        s->hull_valid = 0;
         break;
     case CB_REGIME_POINT:
         for (int i = 0; i < n; i++) out[i] = s->reflect ? 1.0 : 0.0;
@@ -1454,6 +1594,30 @@ static int draw_current_batch(cb_stream_t *s, int n, double *out)
     }
     return 1;
 }
+
+#ifdef CB_VALIDATE_ETA
+/* Deliberately broad, valid two-tangent envelope for adaptation regression.
+ * This changes only the proposal. Both tail slopes retain their proper signs. */
+static int validation_coarse_hull(cb_stream_t *s)
+{
+    s->validation_no_core=1;
+    s->core_valid=0;
+    s->rem_valid=0;
+    invalidate_buffer_after_update(s);
+    cb_hull_t *h=&s->hull;
+    h->m=2;
+    h->density_scale=s->nu;
+    h->pts[0]=hull_drop_point(s,-1.0,8.0);
+    h->pts[1]=hull_drop_point(s,1.0,8.0);
+    for (int i=0;i<2;++i) {
+        h->fvals[i]=target_log_f(s->chi_eff,s->nu,h->pts[i]);
+        h->slopes[i]=target_log_slope(s->chi_eff,s->nu,h->pts[i]);
+        h->intercepts[i]=target_tangent_intercept(s->nu,h->pts[i]);
+    }
+    s->hull_valid=exact_hull_tables(h);
+    return s->hull_valid;
+}
+#endif
 
 /* =========================================================================
  * Public API

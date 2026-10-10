@@ -127,6 +127,25 @@ void mexFunction(int nlhs, mxArray *plhs[],
     }
 
 #ifdef CB_VALIDATE_ETA
+    if (strcmp(cmd,"validation_coarse_hull")==0) {
+        if (nrhs!=2)
+            mexErrMsgIdAndTxt("cb_stream:usage","Usage: validation_coarse_hull(ptr)");
+        if (!validation_coarse_hull(unpack_ptr(prhs[1])))
+            mexErrMsgIdAndTxt("cb_stream:validation","Failed to build test envelope.");
+        return;
+    }
+    if (strcmp(cmd,"validation_ars")==0) {
+        if (nrhs!=2)
+            mexErrMsgIdAndTxt("cb_stream:usage","Usage: stats = validation_ars(ptr)");
+        cb_stream_t *s=unpack_ptr(prhs[1]);
+        plhs[0]=mxCreateDoubleMatrix(1,7,mxREAL);
+        double *v=mxGetPr(plhs[0]);
+        v[0]=(double)s->ars_setups;v[1]=(double)s->ars_proposals;
+        v[2]=(double)s->ars_rejections;v[3]=(double)s->ars_insertions;
+        v[4]=(double)s->ars_insertion_failures;v[5]=(double)s->ars_evaluations;
+        v[6]=(double)s->hull.m;
+        return;
+    }
     if (strcmp(cmd, "validation_core") == 0) {
         if (nrhs != 3)
             mexErrMsgIdAndTxt("cb_stream:usage", "Usage: validation_core(ptr, enabled)");

@@ -1,0 +1,67 @@
+eta gap=1.87446e-05 nu=594 low ARS: KS=0.00345 limit=0.00949 PASS
+eta gap=1.87446e-05 nu=594 low core/remainder: KS=0.00291 limit=0.00949 PASS
+eta gap=1.87446e-05 nu=594 low adaptive rescue: KS=0.00471 limit=0.00949 PASS
+eta gap=1.87446e-05 nu=594 high ARS: KS=0.00345 limit=0.00949 PASS
+eta gap=1.87446e-05 nu=594 high core/remainder: KS=0.00291 limit=0.00949 PASS
+eta gap=1.87446e-05 nu=594 high live core buffer: KS=0.00188 limit=0.00949 PASS
+eta gap=1.87446e-05 nu=594 high adaptive rescue: KS=0.00471 limit=0.00949 PASS
+eta gap=2.84634e-05 nu=258 low ARS: KS=0.00375 limit=0.00949 PASS
+eta gap=2.84634e-05 nu=258 low core/remainder: KS=0.00402 limit=0.00949 PASS
+eta gap=2.84634e-05 nu=258 low adaptive rescue: KS=0.00433 limit=0.00949 PASS
+eta gap=2.84634e-05 nu=258 high ARS: KS=0.00375 limit=0.00949 PASS
+eta gap=2.84634e-05 nu=258 high core/remainder: KS=0.00402 limit=0.00949 PASS
+eta gap=2.84634e-05 nu=258 high live core buffer: KS=0.00301 limit=0.00949 PASS
+eta gap=2.84634e-05 nu=258 high adaptive rescue: KS=0.00433 limit=0.00949 PASS
+eta gap=1e-10 nu=2 low ARS: KS=0.00383 limit=0.00949 PASS
+eta gap=1e-10 nu=2 low ARS (core unavailable): KS=0.00383 limit=0.00949 PASS
+eta gap=1e-10 nu=2 low adaptive rescue: KS=0.00394 limit=0.00949 PASS
+eta gap=1e-10 nu=2 high ARS: KS=0.00383 limit=0.00949 PASS
+eta gap=1e-10 nu=2 high ARS (core unavailable): KS=0.00383 limit=0.00949 PASS
+eta gap=1e-10 nu=2 high adaptive rescue: KS=0.00394 limit=0.00949 PASS
+eta gap=0.02 nu=2 low ARS: KS=0.00382 limit=0.00949 PASS
+eta gap=0.02 nu=2 low ARS (core unavailable): KS=0.00382 limit=0.00949 PASS
+eta gap=0.02 nu=2 low adaptive rescue: KS=0.00226 limit=0.00949 PASS
+eta gap=0.02 nu=2 high ARS: KS=0.00382 limit=0.00949 PASS
+eta gap=0.02 nu=2 high ARS (core unavailable): KS=0.00382 limit=0.00949 PASS
+eta gap=0.02 nu=2 high adaptive rescue: KS=0.00226 limit=0.00949 PASS
+eta gap=0.01 nu=49 low ARS: KS=0.00360 limit=0.00949 PASS
+eta gap=0.01 nu=49 low ARS (core unavailable): KS=0.00360 limit=0.00949 PASS
+eta gap=0.01 nu=49 low adaptive rescue: KS=0.00526 limit=0.00949 PASS
+eta gap=0.01 nu=49 high ARS: KS=0.00360 limit=0.00949 PASS
+eta gap=0.01 nu=49 high ARS (core unavailable): KS=0.00360 limit=0.00949 PASS
+eta gap=0.01 nu=49 high adaptive rescue: KS=0.00526 limit=0.00949 PASS
+eta gap=2 nu=200 low ARS: KS=0.00370 limit=0.00949 PASS
+eta gap=2 nu=200 low ARS (core unavailable): KS=0.00370 limit=0.00949 PASS
+eta gap=2 nu=200 low adaptive rescue: KS=0.00411 limit=0.00949 PASS
+eta gap=2 nu=200 high ARS: KS=0.00370 limit=0.00949 PASS
+eta gap=2 nu=200 high ARS (core unavailable): KS=0.00370 limit=0.00949 PASS
+eta gap=2 nu=200 high adaptive rescue: KS=0.00411 limit=0.00949 PASS
+eta gap=2.7131e-31 nu=7 low ARS: KS=0.00429 limit=0.00949 PASS
+eta gap=2.7131e-31 nu=7 low ARS (core unavailable): KS=0.00429 limit=0.00949 PASS
+eta gap=2.7131e-31 nu=7 low stream buffer: KS=0.00603 limit=0.00949 PASS
+eta gap=2.7131e-31 nu=7 low adaptive rescue: KS=0.00410 limit=0.00949 PASS
+eta gap=7e-20 nu=7 low ARS: KS=0.00429 limit=0.00949 PASS
+eta gap=7e-20 nu=7 low ARS (core unavailable): KS=0.00429 limit=0.00949 PASS
+eta gap=7e-20 nu=7 low stream buffer: KS=0.00603 limit=0.00949 PASS
+eta gap=7e-20 nu=7 low adaptive rescue: KS=0.00410 limit=0.00949 PASS
+eta gap=2e-32 nu=2 low ARS: KS=0.00383 limit=0.00949 PASS
+eta gap=2e-32 nu=2 low ARS (core unavailable): KS=0.00383 limit=0.00949 PASS
+eta gap=2e-32 nu=2 low stream buffer: KS=0.00511 limit=0.00949 PASS
+eta gap=2e-32 nu=2 low adaptive rescue: KS=0.00394 limit=0.00949 PASS
+eta gap=8.88178e-16 nu=7 low ARS: KS=0.00429 limit=0.00949 PASS
+eta gap=8.88178e-16 nu=7 low ARS (core unavailable): KS=0.00429 limit=0.00949 PASS
+eta gap=8.88178e-16 nu=7 low adaptive rescue: KS=0.00410 limit=0.00949 PASS
+eta gap=8.88178e-16 nu=7 high ARS: KS=0.00429 limit=0.00949 PASS
+eta gap=8.88178e-16 nu=7 high ARS (core unavailable): KS=0.00429 limit=0.00949 PASS
+eta gap=8.88178e-16 nu=7 high adaptive rescue: KS=0.00410 limit=0.00949 PASS
+eta gap=2e-150 nu=2 low ARS: KS=0.00383 limit=0.00949 PASS
+eta gap=2e-150 nu=2 low ARS (core unavailable): KS=0.00383 limit=0.00949 PASS
+eta gap=2e-150 nu=2 low stream buffer: KS=0.00511 limit=0.00949 PASS
+eta gap=2e-150 nu=2 low adaptive rescue: KS=0.00394 limit=0.00949 PASS
+eta gap=1 nu=1000000.0 low ARS: KS=0.00271 limit=0.00949 PASS
+eta gap=1 nu=1000000.0 low core/remainder: KS=0.00155 limit=0.00949 PASS
+eta gap=1 nu=1000000.0 low adaptive rescue: KS=0.00489 limit=0.00949 PASS
+eta gap=1 nu=1000000.0 high ARS: KS=0.00271 limit=0.00949 PASS
+eta gap=1 nu=1000000.0 high core/remainder: KS=0.00155 limit=0.00949 PASS
+eta gap=1 nu=1000000.0 high adaptive rescue: KS=0.00489 limit=0.00949 PASS
+Endpoint live-buffer, mode/scale, bounded-failure checks: PASS
