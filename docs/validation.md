@@ -43,16 +43,20 @@ sample is acceptable.
 ## Exact endpoint qualification
 
 Both `cb-validate` (all modes) and `cb_validate.m` automatically include endpoint
-qualification. They cover the two reported SPONG states, gaps down to 1e-10,
+qualification. They cover the reported SPONG states, gaps down to 2e-32,
 both reflections, and exact ARS/core/remainder sampling. Two distribution cases
 retain a live core buffer across statistics replacement. Both suites also
 check 3000 replacements and explicit failure of invalid remainder subtraction.
+Three tiny lower-tail states include the reported nu=7 stall and exercise both
+batched ARS and single draws from live stream buffers. Their reflected interior
+counterparts cannot be represented in double precision; the existing reflected
+cases use representable gaps.
 
 The shared C diagnostic flag `CB_VALIDATE_ETA` disables Gamma/CF approximations
 and returns eta before sigmoid rounding through the usual stream, reflection,
 and buffer path. Ordinary builds retain their theta output and regime policy.
 This prevents endpoint rounding from hiding a wrong latent distribution.
-All 26 latent cases use a two-sided KS limit of 3/sqrt(N), plus reference-grid
+All 35 latent cases use a two-sided KS limit of 3/sqrt(N), plus reference-grid
 error. The independently evaluated density CDF must agree within 5e-7 on
 65537- and 131073-point grids. Each suite uses at most 100000 samples per
 endpoint case, even for larger ordinary PIT runs.

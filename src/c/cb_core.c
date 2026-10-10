@@ -159,6 +159,7 @@ typedef struct {
     int    m;
     double pts   [CB_ARS_MAX_HULL];
     double fvals [CB_ARS_MAX_HULL];
+    double intercepts[CB_ARS_MAX_HULL]; /* stable tangent value at eta=0 */
     double slopes[CB_ARS_MAX_HULL];
     double zpts  [CB_ARS_MAX_HULL-1];
     double logwts[CB_ARS_MAX_HULL];
@@ -343,6 +344,20 @@ static double target_log_f(double chi, double nu, double eta)
     return chi * eta - nu * cb_bft(eta);
 }
 
+/* The tangent intercept is nu*(eta*B'(eta)-B(eta)); chi cancels.
+ * Forming f(eta)-eta*f'(eta) directly loses all useful digits when a
+ * right-hand hull point is very large and positive. Reflection makes this
+ * expression even, and the tail form avoids subtracting quantities O(eta). */
+static double target_tangent_intercept(double nu, double eta)
+{
+    double a = fabs(eta);
+    if (a > 32.0) {
+        double q = exp(-a);
+        return nu * (log(a) - 1.0 + a*q/(1.0-q) - log1p(-q));
+    }
+    return nu * (eta*cb_bft_d1(eta) - cb_bft(eta));
+}
+
 static double cb_mode_warm(double chi, double nu, double eta)
 {
     double xbar = chi / nu;
@@ -414,13 +429,13 @@ static void build_hull_exact(cb_stream_t *s)
         h->pts[i]    = eta_star + sigma * offsets[i];
         h->fvals[i]  = chi * h->pts[i] - nu * cb_bft(h->pts[i]);
         h->slopes[i] = chi - nu * cb_bft_d1(h->pts[i]);
+        h->intercepts[i] = target_tangent_intercept(nu, h->pts[i]);
     }
     for (int i = 0; i < m-1; i++) {
         double ds = h->slopes[i] - h->slopes[i+1];
-        h->zpts[i] = (fabs(ds) < 1e-14)
+        h->zpts[i] = (ds == 0.0)
             ? 0.5*(h->pts[i] + h->pts[i+1])
-            : (h->fvals[i+1] - h->fvals[i]
-               + h->slopes[i]*h->pts[i] - h->slopes[i+1]*h->pts[i+1]) / ds;
+            : (h->intercepts[i+1] - h->intercepts[i]) / ds;
     }
     /* Precompute exm1[i] = expm1(slopes[i] * (zpts[i] - zpts[i-1]))
      * for middle segments i = 1..m-2.  Used in draw_ars_batch to avoid
@@ -430,12 +445,12 @@ static void build_hull_exact(cb_stream_t *s)
     for (int i = 1; i < m-1; i++)
         h->exm1[i] = expm1(h->slopes[i] * (h->zpts[i] - h->zpts[i-1]));
 
-    h->logwts[0]   = h->fvals[0]   + h->slopes[0]  *(h->zpts[0]   - h->pts[0])
+    h->logwts[0]   = h->intercepts[0] + h->slopes[0]*h->zpts[0]
                      - log( h->slopes[0]);
-    h->logwts[m-1] = h->fvals[m-1] + h->slopes[m-1]*(h->zpts[m-2] - h->pts[m-1])
+    h->logwts[m-1] = h->intercepts[m-1] + h->slopes[m-1]*h->zpts[m-2]
                      - log(-h->slopes[m-1]);
     for (int i = 1; i < m-1; i++)
-        h->logwts[i] = log_seg_wt(h->fvals[i], h->slopes[i], h->pts[i],
+        h->logwts[i] = log_seg_wt(h->intercepts[i], h->slopes[i], 0.0,
                                    h->zpts[i-1], h->zpts[i]);
     h->logZ = logsumexp(h->logwts, m);
 
@@ -489,8 +504,7 @@ static void hull_proposal_pre(cb_stream_t *s, const double *probs, double sum,
     }
 
     double sl = h->slopes[seg];
-    double fv = h->fvals[seg];
-    double pp = h->pts[seg];
+    double intercept = h->intercepts[seg];
     double a  = (seg == 0)   ? -INFINITY : h->zpts[seg-1];
     double b  = (seg == m-1) ?  INFINITY : h->zpts[seg];
     double u2 = cb_rng_uniform(&s->rng);
@@ -502,7 +516,7 @@ static void hull_proposal_pre(cb_stream_t *s, const double *probs, double sum,
     else ep = a + log1p(-u2 * (-h->exm1[seg])) / sl;
 
     *eta_out = ep;
-    *log_env_out = fv + sl * (ep - pp);
+    *log_env_out = intercept + sl * ep;
 }
 
 static double core_anchor_log_shape(const cb_stream_t *s, int a, double u)
@@ -1054,7 +1068,7 @@ static void draw_cf_batch(cb_stream_t *s, int n, double *out)
     }
 }
 
-static void draw_ars_batch(cb_stream_t *s, int n, double *out)
+static int draw_ars_batch(cb_stream_t *s, int n, double *out)
 {
     /* Lazy hull rebuild: if the table is invalid, build it now before drawing.
      * This is the ONLY place build_hull() is called -- never in update().
@@ -1083,9 +1097,11 @@ static void draw_ars_batch(cb_stream_t *s, int n, double *out)
         for (int i = 1; i < m; i++) if (h->logwts[i] > mx) mx = h->logwts[i];
         double sum = 0.0;
         for (int i = 0; i < m; i++) { probs[i] = exp(h->logwts[i] - mx); sum += probs[i]; }
+        if (!(sum > 0.0) || !isfinite(sum)) return 0;
         for (int i = 0; i < m; i++) probs[i] /= sum;
     }
 
+    uint64_t proposals = 0;
     while (drawn < n) {
         CB_DRAW_CHECK();
         int need  = n - drawn;
@@ -1094,6 +1110,9 @@ static void draw_ars_batch(cb_stream_t *s, int n, double *out)
 
         for (int b = 0; b < batch && drawn < n; b++) {
             CB_DRAW_CHECK();
+            /* Numerical envelope failures must propagate, never spin forever
+             * or substitute a sample from a different distribution. */
+            if (++proposals > 1000000ULL * (uint64_t)n) return 0;
             double u = cb_rng_uniform(&s->rng);
             double cdf = 0.0;
             int seg = m - 1;
@@ -1103,8 +1122,7 @@ static void draw_ars_batch(cb_stream_t *s, int n, double *out)
             }
 
             double sl  = h->slopes[seg];
-            double fv  = h->fvals[seg];
-            double pp  = h->pts[seg];
+            double intercept = h->intercepts[seg];
             double a   = (seg == 0)   ? -INFINITY : h->zpts[seg-1];
             double bv  = (seg == m-1) ?  INFINITY  : h->zpts[seg];
 
@@ -1137,7 +1155,7 @@ static void draw_ars_batch(cb_stream_t *s, int n, double *out)
                 else
                     ep = a + log1p(-u2 * (-h->exm1[seg])) / sl;
             }
-            double log_env = fv + sl * (ep - pp);
+            double log_env = intercept + sl * ep;
             double log_u   = log(cb_rng_uniform(&s->rng));
 
             /* Chord squeeze */
@@ -1165,6 +1183,7 @@ static void draw_ars_batch(cb_stream_t *s, int n, double *out)
             }
         }
     }
+    return 1;
 }
 
 static void draw_core_batch(cb_stream_t *s, int n, double *out)
@@ -1258,8 +1277,7 @@ static int draw_remainder_batch(cb_stream_t *s, int n, double *out)
 {
     if (n <= 0) return 1;
     if (!s->core_valid) {
-        draw_ars_batch(s, n, out);
-        return 1;
+        return draw_ars_batch(s, n, out);
     }
 
     int cache_ok = s->rem_valid
@@ -1328,7 +1346,7 @@ static int draw_remainder_batch(cb_stream_t *s, int n, double *out)
 /* =========================================================================
  * Buffer refill
  * ========================================================================= */
-static void do_refill(cb_stream_t *s, int n_hint)
+static int do_refill(cb_stream_t *s, int n_hint)
 {
     /* Use the adaptive target for every regime.  It grows when buffers are
      * drained and shrinks when updates invalidate mostly-unused buffers. */
@@ -1360,7 +1378,7 @@ static void do_refill(cb_stream_t *s, int n_hint)
             s->buf_kind = CB_BUF_CORE_U;
         } else {
             build_hull_exact(s);
-            draw_ars_batch(s, n, s->buf);
+            if (!draw_ars_batch(s, n, s->buf)) return 0;
             s->hull_valid = 0;
             s->buf_kind = CB_BUF_THETA;
         }
@@ -1386,6 +1404,7 @@ static void do_refill(cb_stream_t *s, int n_hint)
     if (s->reflect && (s->regime == CB_REGIME_ARS) && !s->core_valid) {
         for (int i = 0; i < n; i++) s->buf[i] = -s->buf[i];
     }
+    return 1;
 }
 
 static void adapt_after_drain(cb_stream_t *s)
@@ -1409,7 +1428,7 @@ static void invalidate_buffer_after_update(cb_stream_t *s)
     s->buf_kind   = CB_BUF_EMPTY;
 }
 
-static void draw_current_batch(cb_stream_t *s, int n, double *out)
+static int draw_current_batch(cb_stream_t *s, int n, double *out)
 {
     switch (s->regime) {
     case CB_REGIME_PRIOR:
@@ -1423,7 +1442,7 @@ static void draw_current_batch(cb_stream_t *s, int n, double *out)
         break;
     case CB_REGIME_ARS:
         build_hull_exact(s);
-        draw_ars_batch(s, n, out);
+        if (!draw_ars_batch(s, n, out)) return 0;
         if (s->reflect) {
             for (int i = 0; i < n; i++) out[i] = cb_reflect_output(out[i]);
         }
@@ -1433,6 +1452,7 @@ static void draw_current_batch(cb_stream_t *s, int n, double *out)
         for (int i = 0; i < n; i++) out[i] = s->reflect ? 1.0 : 0.0;
         break;
     }
+    return 1;
 }
 
 /* =========================================================================
@@ -1482,7 +1502,11 @@ cb_stream_t *cb_stream_create(double chi, double nu,
      * Pays the hull build cost once upfront so the first draw() is free.
      * For suboptimal arms that are instantiated but rarely selected, this
      * means the arm is always ready to serve immediately when chosen. */
-    do_refill(s, s->buf_target);
+    if (!do_refill(s, s->buf_target)) {
+        free(s->buf);
+        free(s);
+        return NULL;
+    }
 
     return s;
 }
@@ -1563,7 +1587,7 @@ int cb_stream_draw(cb_stream_t *s, int n, double *out)
         s->buf_pos = 0;
         s->buf_filled = 0;
         s->buf_kind = CB_BUF_EMPTY;
-        draw_current_batch(s, n, out);
+        if (!draw_current_batch(s, n, out)) return -1;
         cb_clip_interior_draws(s, n, out);
         s->total_draws += (uint64_t)n;
         return n;
@@ -1571,7 +1595,7 @@ int cb_stream_draw(cb_stream_t *s, int n, double *out)
 
     if (n == 1) {
         if (s->buf_pos >= s->buf_filled)
-            do_refill(s, s->buf_capacity);
+            if (!do_refill(s, s->buf_capacity)) return -1;
         if (s->buf_filled == 0) return 0;
 
         if (s->regime == CB_REGIME_ARS && s->core_valid && s->buf_kind == CB_BUF_CORE_U) {
@@ -1607,7 +1631,7 @@ int cb_stream_draw(cb_stream_t *s, int n, double *out)
     while (drawn < n) {
         CB_DRAW_CHECK();
         if (s->buf_pos >= s->buf_filled)
-            do_refill(s, s->buf_capacity);
+            if (!do_refill(s, s->buf_capacity)) return -1;
         if (s->buf_filled == 0) break;
         int avail = s->buf_filled - s->buf_pos;
         int take  = (n - drawn < avail) ? (n - drawn) : avail;

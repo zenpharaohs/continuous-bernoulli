@@ -30,17 +30,21 @@ old_eta_budget = cb_stream_eta_mex('validation_budget', 5);
 eta_budget_cleanup = onCleanup(@() cb_stream_eta_mex('validation_budget', old_eta_budget)); %#ok<NASGU>
 
 states = [594-593.9999812553783, 594; 258-257.99997153659604, 258; ...
-          1e-10, 2; .02, 2; .01, 49; 2, 200];
+          1e-10, 2; .02, 2; .01, 49; 2, 200; ...
+          7*3.8758505860895066e-32,7; 7e-20,7; 2e-32,2];
 R = struct('chi',{},'nu',{},'reflected',{},'path',{},'n',{}, ...
            'ks',{},'ks_limit',{},'reference_error',{},'passed',{});
 for c = 1:size(states,1)
     gap = states(c,1); nu = states(c,2);
     for high = [false true]
+        % Tiny gaps can have no representable interior upper counterpart.
+        if high && nu-gap==nu, continue; end
         chi = gap; if high, chi = nu-gap; end
         rate = chi; if high, rate = nu-chi; end
         [grid, cdf, center, scale, ref_error] = reference_cdf(rate, nu);
         paths = [0 1];
         if high && any(nu == [258 594]), paths = [0 1 2]; end
+        if gap<1e-18, paths(end+1)=3; end
         for path = paths
             [eta, description] = latent_draw(chi, nu, N, path, started);
             if high, eta = -eta; end % compare in the lower reflected coordinate
@@ -60,7 +64,7 @@ for c = 1:size(states,1)
 end
 remainder_errors(started);
 fprintf('  MEX rejection budget and explicit remainder errors PASS\n');
-assert(numel(R)==26 && all([R.passed]), 'cb_validate:endpointDistribution', ...
+assert(numel(R)==35 && all([R.passed]), 'cb_validate:endpointDistribution', ...
        'Exact endpoint distribution qualification failed.');
 fprintf('  MATLAB/MEX endpoint qualification PASSED in %.2fs\n\n', toc(started));
 end
@@ -80,7 +84,8 @@ for k = 1:3000
 end
 reported = [593.9999812553783,594;257.99997153659604,258];
 states = [reported; reported(:,2)-reported(:,1),reported(:,2); ...
-          2,5;300,600;0,10;10,10;0,0];
+          2,5;300,600;0,10;10,10;0,0; ...
+          7*3.8758505860895066e-32,7;7e-20,7;2e-32,2];
 for repeat = 1:20
     for c = 1:size(states,1)
         chi = states(c,1); nu = states(c,2);
@@ -138,7 +143,14 @@ if path==2
 end
 ptr = cb_stream_eta_mex('create',initial_chi,initial_nu,uint64(1729),uint64(0),64);
 cleanup = onCleanup(@() cb_stream_eta_mex('destroy',ptr)); %#ok<NASGU>
-if path==0
+if path==3
+    eta = zeros(N,1);
+    for k=1:N
+        eta(k) = cb_stream_eta_mex('draw',ptr,1);
+        if mod(k,1024)==0, check_time(started); end
+    end
+    description = 'stream buffer';
+elseif path==0
     cb_stream_eta_mex('validation_core',ptr,0);
     eta = cb_stream_eta_mex('draw',ptr,N);
     description = 'ARS';

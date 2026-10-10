@@ -201,7 +201,7 @@ def test_python_validation_smoke():
     assert len(results) > 0
     assert all(r.passed for r in results)
     endpoints = [r for r in results if r.kind == "endpoint_eta"]
-    assert len(endpoints) == 26
+    assert len(endpoints) == 35
     assert any(r.path == "core/remainder" for r in endpoints)
     assert any(r.path == "live core buffer" for r in endpoints)
     assert any(r.chi > r.nu/2 for r in endpoints)
@@ -217,7 +217,7 @@ def test_python_validation_json_artifact(tmp_path):
     assert report['passed'] is True
     assert report['schema'] == 'cb_sampler.python_validation.v2'
     endpoints = [r for r in report['results'] if r['kind'] == 'endpoint_eta']
-    assert len(endpoints) == 26
+    assert len(endpoints) == 35
     assert sum(r['path'] == 'live core buffer' for r in endpoints) == 2
     assert all(r['reference_error'] <= 5e-7 for r in endpoints)
 
@@ -244,7 +244,8 @@ for i in range(1, 3001):
     assert abs(s.peek().sigma * actual_gap / nu**0.5 - 1) < 1e-8
     assert len(s.draw(1)) == 1
 states = [(593.9999812553783, 594), (257.99997153659604, 258),
-          (2, 5), (300, 600), (0, 10), (10, 10)]
+          (2, 5), (300, 600), (0, 10), (10, 10),
+          (7*3.8758505860895066e-32,7), (7e-20,7), (2e-32,2)]
 states += [(nu-chi, nu) for chi, nu in states[:2]]
 for _ in range(20):
     for chi, nu in states:
@@ -255,3 +256,28 @@ s.close()
     env = os.environ.copy()
     env['PYTHONPATH'] = os.pathsep.join(map(str, sys.path))
     subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=15)
+
+
+def test_tiny_interior_stream_draws_return_before_deadline():
+    """Direct constructor/replacement regression for SPONG's nu=7 stall."""
+    import os
+    import subprocess
+    import sys
+    code = '''
+import numpy as np
+from cb_sampler import CbStream
+states = [(7*3.8758505860895066e-32,7), (7e-20,7), (2e-32,2)]
+with CbStream(0,0,seed=1729,buf_size=64) as stream:
+    for _ in range(20):
+        for chi,nu in states + [(300,600), (593.9999812553783,594)]:
+            stream.set_stats(chi,nu)
+            for count in (1,7,65):
+                x = stream.draw(count)
+                assert x.size == count and np.all((x>0) & (x<1))
+for chi,nu in states:
+    with CbStream(chi,nu,seed=1729,buf_size=64) as stream:
+        assert stream.draw(1).size == 1
+'''
+    env = os.environ.copy()
+    env['PYTHONPATH'] = os.pathsep.join(map(str, sys.path))
+    subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=5)
