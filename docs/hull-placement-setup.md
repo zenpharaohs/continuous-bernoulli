@@ -91,3 +91,46 @@ build_cb_stream;
 cb_validate_mode = 'quick';
 cb_validate;
 ```
+
+## Thorough qualification and CF approximation bias
+
+The user's 10 October 2026 thorough MATLAB run (12:47–12:53) used 100 million
+draws in each of the 23 ordinary cases. Every exact ARS case passed, and all
+96 endpoint cases passed at their separate 100000-draw sample size (4.32 s).
+The overall thorough run failed: CF at `Z=.5, nu=500` failed Anderson–Darling
+(5.343) and had Legendre SNR +7.9 with estimated squared Hellinger error
+1.12e-7. Neither KS nor CvM failed. This supersedes any claim that the entire
+sampler is qualified at 100 million draws; the quick qualification still passed.
+
+Inspection of `draw_cf_batch` identifies the missing correction. Its only CF
+coefficient is proportional to the third derivative of B. At symmetry this is
+zero, leaving `eta = sqrt(12/nu)*Normal(0,1)`. The exact symmetric density is
+proportional to `(eta/(2*sinh(eta/2)))^nu`. With `u=eta*sqrt(nu/12)`, its log
+density expands as `-u^2/2 + u^4/(20*nu) + O(u^6/nu^2)`. The quartic term
+changes the variance and tails even though skewness is zero. This behavior
+predates the hull-placement optimization; symmetric CF draws do not construct
+or use an ARS hull.
+
+An independent numerical comparison of that analytic density with the normal,
+on 65537- and 131073-point grids over [-12,12], gives:
+
+| nu | Population KS distance | Squared Hellinger distance | Variance of standardized u |
+|---:|---:|---:|---:|
+| 500 | 1.0446e-4 | 1.1974e-7 | 1.00120041 |
+| 1000 | 5.2241e-5 | 2.9967e-8 | 1.00060010 |
+| 5000 | 1.0451e-5 | 1.1997e-9 | 1.00012000 |
+
+The Hellinger result agrees with the MATLAB estimate and confirms systematic
+approximation bias. The grid change moves KS by less than 1.9e-9 and leaves
+Hellinger values unchanged at the reported precision. Leading-order squared
+Hellinger error is `3/(100*nu^2)`, explaining the dependence on nu.
+
+No sampler routing or acceptance code was changed when recording this report.
+The CF policy currently uses thresholds calibrated at much smaller sample sizes
+and a skewness check; symmetry alone does not establish sufficient accuracy.
+A follow-up should either route insufficiently accurate CF states to exact ARS
+under an explicit accuracy requirement, or replace CF approximation with an
+exactly corrected sampler. Merely changing hull points cannot repair this CF
+bias. Full output and the reference utility are in
+`tools/exact_ars/evidence/hull-setup/matlab-thorough.txt` and
+`cf-symmetric-reference.py`/`.json` in the same directory.
