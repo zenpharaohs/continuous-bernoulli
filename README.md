@@ -94,6 +94,10 @@ family.  Boundary sufficient statistics are returned deterministically and
 are never passed to ARS.  A later observation at the opposite endpoint moves
 the aggregate statistics back into the ordinary continuous family.
 
+MATLAB validation includes self-contained endpoint tests through the production
+MEX and an eta diagnostic MEX built from the same source. No Python installation
+is required. Run `cb_validate_endpoints(16000)` for the focused suite.
+
 ## Known limitations
 
 - **ARS Z=0.10 nu=20** (and similar asymmetric cases with sigma < 2.5): ziggurat

@@ -63,18 +63,7 @@ def run(n=16000):
         raise RuntimeError('Exact endpoint validation requires a C compiler (cc, clang, or gcc)')
     with tempfile.TemporaryDirectory() as tmp:
         tmp = pathlib.Path(tmp)
-        for name, text in [('api', source), ('latent', source.replace(
-                'double th = 1.0 / (1.0 + exp(-ep));', 'double th = ep;').replace(
-                'double th = 1.0 / (1.0 + exp(-eta));', 'double th = eta;').replace(
-                'if (th <= 0.0) th = 5e-324;', '').replace(
-                'if (th >= 1.0) th = nextafter(1.0, 0.0);', '').replace(
-                'if (s->regime == CB_REGIME_POINT) return;', 'return;').replace(
-                's->reflect ? 1.0 - th : th', 'th').replace(
-                's->reflect ? 1.0 - rem : rem', 'rem').replace(
-                'v < 0.0 ? 1.0 + v : v', 'v').replace(
-                's->buf[i] = -s->buf[i];', '(void)0;').replace(
-                'out[i] = 1.0 - out[i];', '(void)0;').replace(
-                'rem[i] = 1.0 - rem[i];', '(void)0;') + r'''
+        for name, text in [('api', source), ('latent', '#define CB_VALIDATE_ETA 1\n' + source + r'''
 /* Test only: force exact ARS on either side, retaining the reflected latent
  * coordinate, and exercise the same core/remainder components as the API. */
 int latent_draw(double chi, double nu, int n, double *out, int mixture) {
@@ -92,6 +81,7 @@ int latent_draw(double chi, double nu, int n, double *out, int mixture) {
             return 0;
         for (int i=0; i<n; ++i)
             if (cb_stream_draw(s,1,out+i) != 1) return 0;
+            else out[i] = -out[i]; /* reference uses the lower coordinate */
         cb_stream_destroy(s);
         return 3;
     }

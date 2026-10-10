@@ -16,6 +16,7 @@ function s = cb_stream(chi, nu, varargin)
 %
 %   The stream object supports:
 %     theta = s.draw(n)        -- draw n samples (serves from buffer)
+%     s.set_stats(chi,nu)      -- replace sufficient statistics
 %     s.update(x)              -- ingest one observation
 %     s.update_batch(xs)       -- ingest a vector of observations
 %     [chi,nu,regime,sigma] = s.peek()  -- current state

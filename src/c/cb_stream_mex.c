@@ -11,6 +11,9 @@
  *   theta = cb_stream_mex('draw', ptr, n)
  *     Draw n samples from the stream.  Returns n-by-1 double vector.
  *
+ *   cb_stream_mex('set_stats', ptr, chi, nu)
+ *     Replace sufficient statistics, preserving eligible transported buffers.
+ *
  *   cb_stream_mex('update', ptr, x)
  *     Ingest one observation x in [0,1].  Updates chi, nu, invalidates buffer,
  *     and re-determines the regime.  Boundary posteriors are point masses.
@@ -52,6 +55,21 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
+
+/* Optional validation budget, disabled for ordinary use. Checking the clock
+ * every 4096 exact rejection iterations bounds stuck draws without a Python
+ * process or a MATLAB timer (which cannot interrupt a running MEX call). */
+static double cb_mex_budget_seconds = 0.0;
+static clock_t cb_mex_draw_start;
+static unsigned int cb_mex_proposals;
+static void cb_mex_draw_check(void)
+{
+    if (cb_mex_budget_seconds > 0.0 && (++cb_mex_proposals & 4095U) == 0U &&
+        (double)(clock() - cb_mex_draw_start) / CLOCKS_PER_SEC > cb_mex_budget_seconds)
+        mexErrMsgIdAndTxt("cb_stream:validationTimeout", "MEX draw exceeded its validation CPU-time budget.");
+}
+#define CB_DRAW_CHECK() cb_mex_draw_check()
 
 /* Include the full C backend inline */
 #include "cb_core.c"
@@ -93,6 +111,60 @@ void mexFunction(int nlhs, mxArray *plhs[],
 
     char cmd[32];
     mxGetString(prhs[0], cmd, sizeof(cmd));
+    cb_mex_draw_start = cb_mex_budget_seconds > 0.0 ? clock() : 0;
+    cb_mex_proposals = 0;
+
+    /* Budget is per MEX call. Return the old value so validation restores it. */
+    if (strcmp(cmd, "validation_budget") == 0) {
+        if (nrhs != 2 || mxGetNumberOfElements(prhs[1]) != 1)
+            mexErrMsgIdAndTxt("cb_stream:usage", "Usage: old = cb_stream_mex('validation_budget', seconds)");
+        double seconds = mxGetScalar(prhs[1]);
+        if (!isfinite(seconds) || seconds < 0.0)
+            mexErrMsgIdAndTxt("cb_stream:domain", "Validation budget must be finite and nonnegative.");
+        if (nlhs > 0) plhs[0] = mxCreateDoubleScalar(cb_mex_budget_seconds);
+        cb_mex_budget_seconds = seconds;
+        return;
+    }
+
+#ifdef CB_VALIDATE_ETA
+    if (strcmp(cmd, "validation_core") == 0) {
+        if (nrhs != 3)
+            mexErrMsgIdAndTxt("cb_stream:usage", "Usage: validation_core(ptr, enabled)");
+        cb_stream_t *s = unpack_ptr(prhs[1]);
+        s->validation_no_core = !mxGetScalar(prhs[2]);
+        s->core_valid = 0;
+        s->rem_valid = 0;
+        invalidate_buffer_after_update(s);
+        return;
+    }
+    if (strcmp(cmd, "validation_state") == 0) {
+        if (nrhs != 2)
+            mexErrMsgIdAndTxt("cb_stream:usage", "Usage: state = validation_state(ptr)");
+        cb_stream_t *s = unpack_ptr(prhs[1]);
+        plhs[0] = mxCreateDoubleMatrix(1, 5, mxREAL);
+        double *v = mxGetPr(plhs[0]);
+        v[0] = s->eta_star; v[1] = s->buf_kind; v[2] = s->buf_pos;
+        v[3] = s->buf_filled; v[4] = s->core_valid;
+        return;
+    }
+    if (strcmp(cmd, "validation_bad_remainder") == 0) {
+        if (nrhs != 2)
+            mexErrMsgIdAndTxt("cb_stream:usage", "Usage: validation_bad_remainder(ptr)");
+        cb_stream_t *s = unpack_ptr(prhs[1]);
+        if (!s->core_valid)
+            mexErrMsgIdAndTxt("cb_stream:validation", "Fault injection requires an active core.");
+        build_hull_exact(s);
+        s->rem_hull = s->hull;
+        s->rem_valid = 1; s->rem_reflect = s->reflect;
+        s->rem_chi_eff = s->chi_eff; s->rem_nu = s->nu;
+        s->rem_eta_star = s->eta_star;
+        s->sigma *= 1000000;
+        s->rem_sigma = s->sigma;
+        s->rem_log_sub_const = INFINITY;
+        s->core_alpha_hat = 0.0;
+        return;
+    }
+#endif
 
     /* ------------------------------------------------------------------
      * CREATE
@@ -161,6 +233,17 @@ void mexFunction(int nlhs, mxArray *plhs[],
         if (cb_stream_draw(s, n, out) != n)
             mexErrMsgIdAndTxt("cb_stream:draw",
                 "Backend failed to draw the requested sample count.");
+        return;
+    }
+
+    /* Replace aggregate sufficient statistics without losing stream identity. */
+    if (strcmp(cmd, "set_stats") == 0) {
+        if (nrhs != 4 || mxGetNumberOfElements(prhs[2]) != 1 ||
+            mxGetNumberOfElements(prhs[3]) != 1)
+            mexErrMsgIdAndTxt("cb_stream:usage", "Usage: cb_stream_mex('set_stats', ptr, chi, nu)");
+        cb_stream_t *s = unpack_ptr(prhs[1]);
+        if (!cb_stream_set_stats(s, mxGetScalar(prhs[2]), mxGetScalar(prhs[3])))
+            mexErrMsgIdAndTxt("cb_stream:domain", "Require finite sufficient statistics 0 <= chi <= nu.");
         return;
     }
 
@@ -278,6 +361,6 @@ void mexFunction(int nlhs, mxArray *plhs[],
     }
 
     mexErrMsgIdAndTxt("cb_stream:unknown",
-        "Unknown command '%s'. Valid: create, draw, update, update_batch, peek, rebuilds, core_stats, destroy.",
+        "Unknown command '%s'. Valid: create, draw, set_stats, update, update_batch, peek, rebuilds, core_stats, validation_budget, destroy.",
         cmd);
 }

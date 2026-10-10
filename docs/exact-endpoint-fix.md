@@ -52,8 +52,8 @@ completed all 1395 trace rows. The Python API suite also includes a portable
 15-second timeout regression requiring no SciPy or compiler at test time.
 
 
-The endpoint regression is now shared with both regular validation entry
-points. Its current independent CDF uses converged NumPy quadrature and includes
+Both regular validation entry points now include endpoint regressions.
+MATLAB tests its MEX gateways directly and computes its own reference CDF. Python's current independent CDF uses converged NumPy quadrature and includes
 two additional live-buffer distribution cases (26 total). The SciPy results
 above record the original fix verification; see `docs/validation.md` for the
 current sample-dependent KS criterion and JSON report fields.

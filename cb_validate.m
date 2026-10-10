@@ -133,24 +133,9 @@ catch e
     return;
 end
 
-%% Exact endpoint qualification
-% Theta PIT cannot certify an endpoint distribution after sigmoid rounding.
-% The shared qualification suite captures latent eta from the C exact path,
-% checks both reflections, and deadlines live-buffer replacements/rejections.
-% Override cb_validate_python with an interpreter that has NumPy installed.
-if ~exist('cb_validate_python', 'var') || isempty(cb_validate_python)
-    cb_validate_python = 'python3';
-end
-endpoint_script = fullfile(fileparts(mfilename('fullpath')), ...
-                          'tests', 'exact_endpoint_regression.py');
-fprintf('Exact endpoint qualification (60-second subprocess deadline):\n');
-[endpoint_status, endpoint_report] = system(sprintf('"%s" "%s" --n %d', ...
-    cb_validate_python, endpoint_script, min(N_QUAL, 100000)));
-fprintf('%s\n', endpoint_report);
-if endpoint_status ~= 0
-    error('cb_validate:endpointFailure', ...
-          'Exact endpoint qualification failed; validation is not certified.');
-end
+%% Self-contained MATLAB/MEX endpoint qualification
+% Test the production gateway plus eta diagnostics from the same MEX source.
+endpoint_results = cb_validate_endpoints(min(N_QUAL,100000));
 
 %% Test cases
 % Ordinary theta PIT cases use the lower half to preserve output precision.

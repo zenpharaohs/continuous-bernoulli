@@ -38,6 +38,16 @@
 /* =========================================================================
  * Configuration
  * ========================================================================= */
+/* MEX validation can interrupt rejection loops; other builds pay no cost. */
+#ifndef CB_DRAW_CHECK
+#define CB_DRAW_CHECK() ((void)0)
+#endif
+#ifdef CB_VALIDATE_ETA
+#define CB_ALLOW_APPROX 0
+#else
+#define CB_ALLOW_APPROX 1
+#endif
+
 #define CB_SIGMA_CF      0.20   /* CF threshold: validated at N=50000 alpha=0.01 */
 
 /* Gamma regime accuracy thresholds.
@@ -182,6 +192,9 @@ typedef struct {
  * ========================================================================= */
 typedef struct {
     double chi, nu;
+#ifdef CB_VALIDATE_ETA
+    int validation_no_core;
+#endif
     int    regime;
     int    reflect;     /* 1 if chi/nu > 0.5: sample with chi_eff=nu-chi, return 1-theta.
                         * Exact identity: p(theta|chi,nu) = p(1-theta|nu-chi,nu).
@@ -250,13 +263,49 @@ static int cb_observation_valid(double x)
     return isfinite(x) && x >= 0.0 && x <= 1.0;
 }
 
+/* Compile-time diagnostic output retains eta through the same stream/buffer
+ * path. Production builds keep their existing sigmoid and endpoint rounding. */
+static double cb_exact_output(double eta)
+{
+#ifdef CB_VALIDATE_ETA
+    return eta;
+#else
+    double th = 1.0 / (1.0 + exp(-eta));
+    if (th <= 0.0) th = 5e-324;
+    if (th >= 1.0) th = nextafter(1.0, 0.0);
+    return th;
+#endif
+}
+
+static double cb_reflect_output(double v)
+{
+#ifdef CB_VALIDATE_ETA
+    return -v;
+#else
+    return 1.0 - v;
+#endif
+}
+
+static double cb_decode_buffer(double v)
+{
+#ifdef CB_VALIDATE_ETA
+    return v; /* reflected eta buffers already have the appropriate sign */
+#else
+    return v < 0.0 ? 1.0 + v : v;
+#endif
+}
+
 static void cb_clip_interior_draws(const cb_stream_t *s, int n, double *out)
 {
+#ifndef CB_VALIDATE_ETA
     if (s->regime == CB_REGIME_POINT) return;
     for (int i = 0; i < n; i++) {
         if (out[i] <= 0.0) out[i] = nextafter(0.0, 1.0);
         if (out[i] >= 1.0) out[i] = nextafter(1.0, 0.0);
     }
+#else
+    (void)s; (void)n; (void)out;
+#endif
 }
 
 /* =========================================================================
@@ -756,6 +805,9 @@ static void build_core(cb_stream_t *s)
     s->core_grid_valid = 0;
     s->core_zig_valid = 0;
     s->rem_valid = 0;
+#ifdef CB_VALIDATE_ETA
+    if (s->validation_no_core) return;
+#endif
     double chi0 = s->chi_eff, nu0 = s->nu;
     double room = nu0 - 2.0 * chi0;
     if (nu0 < CB_CORE_MIN_NU || room < CB_CORE_MIN_ROOM) return;
@@ -879,7 +931,7 @@ static void determine_regime(cb_stream_t *s)
     {
         double zmin    = (zbar < 0.5) ? zbar : 1.0 - zbar;
         double width_ok = zmin * sqrt(nu) < CB_GAMMA_SQRTN_MAX;
-        if (nu >= CB_GAMMA_MIN_NU && (zbar < gam_thr || (1.0 - zbar) < gam_thr) && width_ok) {
+        if (CB_ALLOW_APPROX && nu >= CB_GAMMA_MIN_NU && (zbar < gam_thr || (1.0 - zbar) < gam_thr) && width_ok) {
             /* Precision guard for the high-Z reflected branch.
              * phi = exp(-tau) rounds to 0 (i.e. 1-phi rounds to 1.0) when
              * tau > -log(eps/2) ~ 36.7.  For Gamma(nu+1, rate) with
@@ -920,7 +972,7 @@ static void determine_regime(cb_stream_t *s)
     s->sigma    = sigma;
     s->mode_valid = 1;
 
-    if (nu >= CB_CF_MIN_NU && sigma < CB_SIGMA_CF) {
+    if (CB_ALLOW_APPROX && nu >= CB_CF_MIN_NU && sigma < CB_SIGMA_CF) {
         /* CF regime: also require the standardized skewness to be small.
          * The residual KS error scales as ~0.21*|kappa3|/sqrt(nu), so
          * cases with |kappa3|/sqrt(nu) >= CB_CF_SKEW_MAX are routed to ARS.
@@ -997,9 +1049,7 @@ static void draw_cf_batch(cb_stream_t *s, int n, double *out)
     for (int i = 0; i < n; i++) {
         double u  = cb_rng_normal(&s->rng, &s->normal_spare, &s->has_spare);
         double eta = eta_star + sigma*u - cf_coef*sigma*(u*u - 1.0);
-        double th  = 1.0 / (1.0 + exp(-eta));
-        if (th <= 0.0) th = 5e-324;
-        if (th >= 1.0) th = nextafter(1.0, 0.0);
+        double th = cb_exact_output(eta);
         out[i] = th;
     }
 }
@@ -1037,11 +1087,13 @@ static void draw_ars_batch(cb_stream_t *s, int n, double *out)
     }
 
     while (drawn < n) {
+        CB_DRAW_CHECK();
         int need  = n - drawn;
         int batch = (int)(CB_ARS_OVERBOOK * need);
         if (batch < CB_ARS_MIN_BATCH) batch = CB_ARS_MIN_BATCH;
 
         for (int b = 0; b < batch && drawn < n; b++) {
+            CB_DRAW_CHECK();
             double u = cb_rng_uniform(&s->rng);
             double cdf = 0.0;
             int seg = m - 1;
@@ -1108,9 +1160,7 @@ static void draw_ars_batch(cb_stream_t *s, int n, double *out)
             }
 
             if (acc) {
-                double th = 1.0 / (1.0 + exp(-ep));
-                if (th <= 0.0) th = 5e-324;
-                if (th >= 1.0) th = nextafter(1.0, 0.0);
+                double th = cb_exact_output(ep);
                 out[drawn++] = th;
             }
         }
@@ -1130,6 +1180,7 @@ static void draw_core_batch(cb_stream_t *s, int n, double *out)
         const cb_core_zig_t *z = &s->core_zig;
         int drawn = 0;
         while (drawn < n) {
+            CB_DRAW_CHECK();
             double side_u = cb_rng_uniform(&s->rng);
             int right = side_u < z->p_right;
             const double *x = right ? z->x_R : z->x_L;
@@ -1175,6 +1226,7 @@ static void draw_core_batch(cb_stream_t *s, int n, double *out)
     const cb_hull_t *h = &s->core_hull;
     int m = h->m;
     while (drawn < n) {
+        CB_DRAW_CHECK();
         double u, log_env;
         sample_core_proposal(s, &u, &log_env);
         double log_u = log(cb_rng_uniform(&s->rng));
@@ -1251,6 +1303,7 @@ static int draw_remainder_batch(cb_stream_t *s, int n, double *out)
     int drawn = 0;
     uint64_t proposals = 0;
     while (drawn < n) {
+        CB_DRAW_CHECK();
         /* A failed remainder certificate must report failure, never hang or
          * replace a selected remainder with a draw from another density. */
         if (++proposals > 1000000ULL * (uint64_t)n) return 0;
@@ -1263,9 +1316,7 @@ static int draw_remainder_batch(cb_stream_t *s, int n, double *out)
         double log_acc = lr - log_env;
         if (log_acc > 0.0) log_acc = 0.0;
         if (log(cb_rng_uniform(&s->rng)) <= log_acc) {
-            double th = 1.0 / (1.0 + exp(-eta));
-            if (th <= 0.0) th = 5e-324;
-            if (th >= 1.0) th = nextafter(1.0, 0.0);
+            double th = cb_exact_output(eta);
             out[drawn++] = th;
         }
     }
@@ -1374,7 +1425,7 @@ static void draw_current_batch(cb_stream_t *s, int n, double *out)
         build_hull_exact(s);
         draw_ars_batch(s, n, out);
         if (s->reflect) {
-            for (int i = 0; i < n; i++) out[i] = 1.0 - out[i];
+            for (int i = 0; i < n; i++) out[i] = cb_reflect_output(out[i]);
         }
         s->hull_valid = 0;
         break;
@@ -1528,14 +1579,12 @@ int cb_stream_draw(cb_stream_t *s, int n, double *out)
             if (cb_rng_uniform(&s->rng) < p_rem) {
                 double rem;
                 if (!draw_remainder_batch(s, 1, &rem)) return -1;
-                out[0] = s->reflect ? 1.0 - rem : rem;
+                out[0] = s->reflect ? cb_reflect_output(rem) : rem;
             } else {
                 double u = s->buf[s->buf_pos++];
                 double eta = s->eta_star + s->sigma * u;
-                double th = 1.0 / (1.0 + exp(-eta));
-                if (th <= 0.0) th = 5e-324;
-                if (th >= 1.0) th = nextafter(1.0, 0.0);
-                out[0] = s->reflect ? 1.0 - th : th;
+                double th = cb_exact_output(eta);
+                out[0] = s->reflect ? cb_reflect_output(th) : th;
                 s->core_draws++;
             }
             cb_clip_interior_draws(s, 1, out);
@@ -1546,7 +1595,7 @@ int cb_stream_draw(cb_stream_t *s, int n, double *out)
 
         {
             double v = s->buf[s->buf_pos++];
-            out[0] = v < 0.0 ? 1.0 + v : v;
+            out[0] = cb_decode_buffer(v);
             cb_clip_interior_draws(s, 1, out);
             adapt_after_drain(s);
             s->total_draws++;
@@ -1556,6 +1605,7 @@ int cb_stream_draw(cb_stream_t *s, int n, double *out)
 
     int drawn = 0;
     while (drawn < n) {
+        CB_DRAW_CHECK();
         if (s->buf_pos >= s->buf_filled)
             do_refill(s, s->buf_capacity);
         if (s->buf_filled == 0) break;
@@ -1580,7 +1630,7 @@ int cb_stream_draw(cb_stream_t *s, int n, double *out)
                 }
                 if (s->reflect) {
                     for (int i = 0; i < k_rem; i++)
-                        rem[i] = 1.0 - rem[i];
+                        rem[i] = cb_reflect_output(rem[i]);
                 }
 
                 const double *src = s->buf + s->buf_pos;
@@ -1595,10 +1645,8 @@ int cb_stream_draw(cb_stream_t *s, int n, double *out)
                     } else {
                         double u = src[core_i++];
                         double eta = s->eta_star + s->sigma * u;
-                        double th = 1.0 / (1.0 + exp(-eta));
-                        if (th <= 0.0) th = 5e-324;
-                        if (th >= 1.0) th = nextafter(1.0, 0.0);
-                        out[block0 + i] = s->reflect ? 1.0 - th : th;
+                        double th = cb_exact_output(eta);
+                        out[block0 + i] = s->reflect ? cb_reflect_output(th) : th;
                     }
                 }
                 free(rem);
@@ -1607,10 +1655,8 @@ int cb_stream_draw(cb_stream_t *s, int n, double *out)
                 double *dst = out + drawn;
                 for (int i = 0; i < k_core; i++) {
                     double eta = s->eta_star + s->sigma * src[i];
-                    double th = 1.0 / (1.0 + exp(-eta));
-                    if (th <= 0.0) th = 5e-324;
-                    if (th >= 1.0) th = nextafter(1.0, 0.0);
-                    dst[i] = s->reflect ? 1.0 - th : th;
+                    double th = cb_exact_output(eta);
+                    dst[i] = s->reflect ? cb_reflect_output(th) : th;
                 }
             }
             s->buf_pos += k_core;
@@ -1626,7 +1672,7 @@ int cb_stream_draw(cb_stream_t *s, int n, double *out)
         double       *dst = out + drawn;
         for (int i = 0; i < take; i++) {
             double v = src[i];
-            dst[i]   = v < 0.0 ? 1.0 + v : v;
+            dst[i]   = cb_decode_buffer(v);
         }
         s->buf_pos += take;
         adapt_after_drain(s);
@@ -1807,9 +1853,7 @@ int main(void)
         double t0 = wall_seconds();
         for (int i = 0; i < N_BULK; i++) {
             double eta = eta_star + sigma * out[i];
-            double th = 1.0 / (1.0 + exp(-eta));
-            if (th <= 0.0) th = 5e-324;
-            if (th >= 1.0) th = nextafter(1.0, 0.0);
+            double th = cb_exact_output(eta);
             out[i] = th;
         }
         double dt = wall_seconds() - t0;

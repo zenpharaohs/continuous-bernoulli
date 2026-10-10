@@ -10,6 +10,7 @@ classdef CbStreamSampler < handle
 %
 %   Methods:
 %     theta = s.draw(n)          draw n samples; refills buffer as needed
+%     s.set_stats(chi, nu)       replace sufficient statistics
 %     s.update(x)                ingest one observation x in [0,1]
 %     s.update_batch(xs)         ingest a vector of observations
 %     [chi,nu,r,sig] = s.peek()  current chi, nu, regime (0-4), sigma
@@ -61,6 +62,11 @@ classdef CbStreamSampler < handle
             if nargin < 2, n = 1; end
             theta = cb_stream_mex('draw', obj.ptr_, int32(n));
             obj.n_draws_ = obj.n_draws_ + n;
+        end
+
+        function set_stats(obj, chi, nu)
+        % SET_STATS Replace sufficient statistics while preserving the stream.
+            cb_stream_mex('set_stats', obj.ptr_, double(chi), double(nu));
         end
 
         function update(obj, x)
