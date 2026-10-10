@@ -65,7 +65,15 @@ Raw minimum/maximum times and all variants are in `batches.csv`.
 - Production C compiled with `-Wall -Wextra` without warnings; packaged and
   repository C sources match byte for byte.
 
-MATLAB/MEX validation: awaiting the user's run of the expanded 96-case suite.
+MATLAB/MEX validation: the user's two fresh builds and quick validation runs
+on 10 October 2026 (12:43 and 12:44) passed all 96 endpoint cases at 100000
+draws per case and all 23 ordinary cases. Endpoint qualification completed in
+4.57 and 6.21 seconds, including production-interface statistics replacement,
+reflection, updates, live buffers, adaptive rescue, and bounded error checks.
+There were no KS/AD/CvM failures or borderline Legendre results. Observed median
+ARS throughput was 23.7 and 25.2 M/s; these whole-suite measurements are not a
+controlled before/after setup benchmark. Full logs are saved alongside the raw
+evidence as `matlab-validation-1243.txt` and `matlab-validation-1244.txt`.
 
 ## Reproduce
 
