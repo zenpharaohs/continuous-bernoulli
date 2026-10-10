@@ -136,6 +136,7 @@ end
 %% Self-contained MATLAB/MEX endpoint qualification
 % Test the production gateway plus eta diagnostics from the same MEX source.
 endpoint_results = cb_validate_endpoints(min(N_QUAL,100000));
+cf_results = cb_validate_cf(min(N_QUAL,100000));
 
 %% Test cases
 % Ordinary theta PIT cases use the lower half to preserve output precision.

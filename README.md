@@ -87,7 +87,7 @@ continuous-bernoulli/
 | Point  | nu > 0 and chi in {0, nu} | Closed-family limit delta_0 or delta_1 |
 | ARS    | default (nu < 50) | Exact, always correct |
 | Gamma  | nu >= 50, extreme Z | Fast approximation, validated |
-| CF     | nu >= 50, sigma < 0.20, symmetric | Fast approximation, validated |
+| CF     | nu >= 50, sigma < 0.20, small skew | Exact normal-center/tangent-tail correction |
 
 The point-mass regime is an explicit weak closure of the proper posterior
 family.  Boundary sufficient statistics are returned deterministically and
@@ -111,11 +111,7 @@ is required. Run `cb_validate_endpoints(16000)` for the focused suite.
   IEEE 754 constraint, not a sampler error.  The sampler fights as hard as
   double arithmetic allows.
 
-- **CF missing kappa_4**: the Cornish-Fisher path (very narrow posteriors,
-  nu >= 50, symmetric) has a small detectable error at N = 1G (H^2 ~ 1e-6)
-  from a missing fourth-order term. Deferred.
-
-## Throughput (ThinkPad P16s, single thread)
+## Historical throughput (ThinkPad P16s, single thread; before exact CF correction)
 
 | Regime | Sampler only |
 |--------|-------------|

@@ -120,3 +120,13 @@ selection, cached chords and inlining while retaining endpoint qualification.
 
 The [hull placement profile](hull-placement-setup.md) records bounded Newton
 and asymmetric seed setup savings, with an expanded threshold sensitivity audit.
+
+## Exact CF qualification
+
+`cb_validate` also runs `cb_validate_cf`: independent-CDF checks through the
+production and latent MEX, symmetric CF, reflections, endpoint-adjacent CF
+states, live statistics replacement, and buffered/batch bounded errors. The
+Python regression reconstructs the accepted proposal density against an
+independent target, detecting the old symmetric bias without requiring
+100 million draws. See [exact CF correction](exact-cf-correction.md) for
+the envelope derivation, numerical audit and CF/ARS benchmarks.

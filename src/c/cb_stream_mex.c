@@ -127,6 +127,31 @@ void mexFunction(int nlhs, mxArray *plhs[],
     }
 
 #ifdef CB_VALIDATE_ETA
+    if (strcmp(cmd,"validation_bad_cf")==0) {
+        if (nrhs!=2)
+            mexErrMsgIdAndTxt("cb_stream:usage","Usage: validation_bad_cf(ptr)");
+        cb_stream_t *s=unpack_ptr(prhs[1]);
+        if (!build_cf_exact(s)) mexErrMsgIdAndTxt("cb_stream:validation","Invalid CF fault state.");
+        invalidate_buffer_after_update(s);s->core_valid=0;s->regime=CB_REGIME_CF;
+        s->cf_pad=1e6;
+        return;
+    }
+    if (strcmp(cmd,"validation_cf")==0) {
+        if (nrhs!=2)
+            mexErrMsgIdAndTxt("cb_stream:usage","Usage: stats = validation_cf(ptr)");
+        cb_stream_t *s=unpack_ptr(prhs[1]);
+        if (!(s->sigma<CB_SIGMA_CF) || !build_cf_exact(s))
+            mexErrMsgIdAndTxt("cb_stream:validation","Invalid exact CF envelope.");
+        invalidate_buffer_after_update(s);
+        s->core_valid=0;s->rem_valid=0;s->regime=CB_REGIME_CF;
+        if (nlhs>0) {
+            plhs[0]=mxCreateDoubleMatrix(1,4,mxREAL);
+            double *v=mxGetPr(plhs[0]);
+            v[0]=(double)s->cf_proposals;v[1]=(double)s->cf_evaluations;
+            v[2]=(double)s->cf_squeezes;v[3]=(double)s->cf_tails;
+        }
+        return;
+    }
     if (strcmp(cmd,"validation_coarse_hull")==0) {
         if (nrhs!=2)
             mexErrMsgIdAndTxt("cb_stream:usage","Usage: validation_coarse_hull(ptr)");

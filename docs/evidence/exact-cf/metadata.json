@@ -1,0 +1,8 @@
+{
+  "baseline": "a930583 (biased CF)",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "compiler": "clang -O3",
+  "trials": 9,
+  "source_sha256": "c57836a3d42f4454a8e6a08bd56712b8470b5af2d206f4e721bf52b712ce9b25",
+  "timing": "Fresh stream per timed group; warm batches amortize initial ARS build; cold batches replace stats per batch; separately timed stats updates; counter-free timing builds."
+}

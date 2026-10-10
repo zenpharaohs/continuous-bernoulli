@@ -4,7 +4,7 @@
  *
  * Three sampling regimes (automatic triage):
  *   GAMMA:  Z_bar < 1/(2*log(nu))  -- tau~Gamma(nu+1,chi), theta=exp(-tau)
- *   CF:     sigma < CB_SIGMA_CF    -- Cornish-Fisher corrected normal
+ *   CF:     sigma < CB_SIGMA_CF    -- exact corrected normal / tangent tails
  *   ARS:    otherwise              -- Adaptive Rejection Sampling + squeeze
  *
  * Regime lifetime:
@@ -12,10 +12,9 @@
  *   transient (~3-12 pulls) and the CF phase is late (~300-700 pulls).
  *   ARS dominates the useful pull range and is NOT merely a warm-up.
  *
- * CB_SIGMA_CF = 0.20 (validated in cb_cf_threshold.m):
- *   At sigma < 0.20 the CF sampler passes PIT at N=50000, alpha=0.01.
- *   The previous threshold of 0.25 was too permissive -- sigma in [0.20,0.25]
- *   has detectable approximation error at large N.
+ * CF routing retains the historical sigma/skew thresholds for efficiency.
+ * CF draws now use an exact normal-center/tangent-tail rejection envelope,
+ * correcting all posterior terms, including symmetric kurtosis.
  *
  * Compilation:
  *   Standalone test:
@@ -49,7 +48,15 @@
 #define CB_ALLOW_APPROX 1
 #endif
 
-#define CB_SIGMA_CF      0.20   /* CF threshold: validated at N=50000 alpha=0.01 */
+#define CB_SIGMA_CF      0.20   /* performance routing; CF draws are exact */
+#ifndef CB_ENABLE_CF
+#define CB_ENABLE_CF 1
+#endif
+#if CB_ENABLE_CF && (defined(CB_VALIDATE_CF) || CB_ALLOW_APPROX)
+#define CB_ALLOW_CF 1
+#else
+#define CB_ALLOW_CF 0
+#endif
 
 /* Gamma regime accuracy thresholds.
  * The Gamma sampler draws tau~Gamma(nu+1,chi) and returns theta=exp(-tau).
@@ -82,18 +89,10 @@
                                     * is undetectable at any practical N. */
 #define CB_CF_MIN_NU         50.0   /* minimum nu for CF regime, same rationale. */
 
-/* CF regime skewness threshold.
- * The Cornish-Fisher correction handles the kappa3/sqrt(nu) skewness term
- * explicitly, but leaves a residual KS error ~0.21*|kappa3|/sqrt(nu) due
- * to higher-order terms.  For N=1M the KS critical value is 0.00163, so
- * we require |kappa3|/sqrt(nu) < 0.006 (= 0.00163/0.21 * 0.77 safety).
- * Symmetric posteriors (Z_bar=0.5, kappa3=0) always pass; asymmetric ones
- * with detectable residual skewness are routed to ARS.
- * Calibration from cb_qualify.m N=1M run (see session notes 2026-03-20):
- *   All FAIL CF cases: |kappa3|/sqrt(nu) in [0.013, 0.040] >> 0.006.
- *   All PASS CF cases: kappa3=0 (Z=0.5 by symmetry).
- */
-#define CB_CF_SKEW_MAX       0.006  /* max |kappa3|/sqrt(nu) for CF regime */
+/* Historical skewness routing threshold retained as a performance gate:
+ * small skew gives efficient normal-center proposals. Accuracy no longer
+ * depends on truncating a Cornish-Fisher expansion. Larger skew uses ARS. */
+#define CB_CF_SKEW_MAX       0.006  /* performance gate, not an accuracy certificate */
 #define CB_ARS_MAX_HULL  16
 #ifndef CB_ARS_ADAPTIVE
 #define CB_ARS_ADAPTIVE 1
@@ -235,6 +234,13 @@ typedef struct {
     double chi_eff;     /* chi if reflect=0, else nu-chi */
     double eta_star, bpp_star, sigma;
     double kappa3, cf_coef;
+    /* Exact CF normal-center / tangent-tail envelope, relative to the mode. */
+    double cf_radius, cf_min_curv, cf_max_curv, cf_derivative, cf_shift;
+    double cf_sd, cf_pad, cf_left_f, cf_right_f, cf_left_s, cf_right_s;
+    double cf_center_mass, cf_left_mass;
+#ifdef CB_ARS_DIAGNOSTICS
+    uint64_t cf_proposals, cf_evaluations, cf_squeezes, cf_tails;
+#endif
     int    mode_valid;
     cb_hull_t hull;
 
@@ -500,6 +506,38 @@ static double target_relative(cb_stream_t *s, double eta)
     if (fabs(eta)<1.0 && fabs(mode)<1.0)
         return fma(chi-.5*nu,eta-mode,-nu*(cb_bft_centered(eta)-cb_bft_centered(mode)));
     return chi*(eta-mode)-nu*(cb_bft(eta)-cb_bft(mode));
+}
+
+/* B'' is even and decreases with |eta|: sinh(t)^3 > t^3*cosh(t)
+ * for t>0, as follows from the positive power-series difference starting
+ * at t^7, proves the third derivative is negative for eta>0.
+ * Taylor's integral remainder bounds f-f(mode) between two quadratics
+ * on [mode-radius,mode+radius]. Outside, concavity supplies tangent tails.
+ * The nonzero derivative at a floating-point mode is retained in both bounds.
+ * Curvature inflation covers the derivative kernel's truncation/roundoff. */
+static int build_cf_exact(cb_stream_t *s)
+{
+    double mode=s->eta_star, radius=4.5*s->sigma;
+    double far=fabs(mode)+radius, near=fmax(0.0,fabs(mode)-radius);
+    double kmin=s->nu*cb_bft_d2(far)*(1.0-1e-10);
+    double kmax=s->nu*cb_bft_d2(near)*(1.0+1e-10);
+    double derivative=target_log_slope(s->chi_eff,s->nu,mode);
+    double shift=derivative/kmin, sd=1.0/sqrt(kmin);
+    double pad=64.0*DBL_EPSILON*(1.0+s->nu*(1.0+fabs(cb_bft(mode))));
+    double lf=target_relative(s,mode-radius), rf=target_relative(s,mode+radius);
+    double ls=target_log_slope(s->chi_eff,s->nu,mode-radius);
+    double rs=target_log_slope(s->chi_eff,s->nu,mode+radius);
+    double cm=sd*sqrt(2.0*3.14159265358979323846)
+              *exp(pad+.5*derivative*shift);
+    double lm=exp(lf+pad)/ls, rm=exp(rf+pad)/(-rs), total=cm+lm+rm;
+    if (!(kmin>0 && kmax>=kmin && kmax<=1.5*kmin && pad<=.01
+          && ls>0 && rs<0 && fabs(shift)<.1*radius && total>0 && cm/total>=.9)
+        || !isfinite(total) || !isfinite(pad) || !isfinite(sd)) return 0;
+    s->cf_radius=radius;s->cf_min_curv=kmin;s->cf_max_curv=kmax;
+    s->cf_derivative=derivative;s->cf_shift=shift;s->cf_sd=sd;s->cf_pad=pad;
+    s->cf_left_f=lf;s->cf_right_f=rf;s->cf_left_s=ls;s->cf_right_s=rs;
+    s->cf_center_mass=cm/total;s->cf_left_mass=lm/total;
+    return 1;
 }
 
 /* Point placement need only approximate the requested drop. Tangents at
@@ -1237,15 +1275,12 @@ static void determine_regime(cb_stream_t *s)
     s->sigma    = sigma;
     s->mode_valid = 1;
 
-    if (CB_ALLOW_APPROX && nu >= CB_CF_MIN_NU && sigma < CB_SIGMA_CF) {
-        /* CF regime: also require the standardized skewness to be small.
-         * The residual KS error scales as ~0.21*|kappa3|/sqrt(nu), so
-         * cases with |kappa3|/sqrt(nu) >= CB_CF_SKEW_MAX are routed to ARS.
-         * This routes all asymmetric CF cases (Z != 0.5) where the CF
-         * correction leaves a detectable systematic error at N=1M. */
+    if (CB_ALLOW_CF && nu >= CB_CF_MIN_NU && sigma < CB_SIGMA_CF) {
+        /* Select the exact normal-center envelope only where efficient. */
         double bppp = cb_bft_d3(eta_star);
         double k3   = bppp / pow(bpp, 1.5);
         if (fabs(k3) / sqrt(nu) >= CB_CF_SKEW_MAX) goto ars_regime;
+        if (!build_cf_exact(s)) goto ars_regime;
         s->regime  = CB_REGIME_CF;
         s->kappa3  = k3;
         s->cf_coef = k3 / (6.0 * sqrt(nu));
@@ -1306,17 +1341,62 @@ static void draw_gamma_batch(cb_stream_t *s, int n, double *out)
     }
 }
 
-static void draw_cf_batch(cb_stream_t *s, int n, double *out)
+/* Exact correction: normalized proposal is a truncated normal center plus
+ * exponential tails. A lower quadratic gives a cheap squeeze; only ambiguous
+ * proposals evaluate the full posterior. No CF polynomial is used as a density.
+ * Rejection/certificate failure is reported through both public draw paths. */
+static int draw_cf_batch(cb_stream_t *s, int n, double *out)
 {
-    double eta_star = s->eta_star;
-    double sigma    = s->sigma;
-    double cf_coef  = s->cf_coef;
-    for (int i = 0; i < n; i++) {
-        double u  = cb_rng_normal(&s->rng, &s->normal_spare, &s->has_spare);
-        double eta = eta_star + sigma*u - cf_coef*sigma*(u*u - 1.0);
-        double th = cb_exact_output(eta);
-        out[i] = th;
+    int drawn=0;uint64_t attempts=0;
+    while (drawn<n) {
+        CB_DRAW_CHECK();
+        /* Setup requires a center mass >= .9, curvature ratio <= 1.5,
+         * small mode displacement and pad <= .01. Its integrated lower
+         * quadratic certifies acceptance > .6; a stalled loop is numerical
+         * failure. This budget is ample and independent of a tiny tail mass. */
+        if (++attempts>65536ULL+64ULL*(uint64_t)n) return 0;
+#ifdef CB_ARS_DIAGNOSTICS
+        ++s->cf_proposals;
+#endif
+        double component=cb_rng_uniform(&s->rng), delta, env;
+        int center=component<s->cf_center_mass;
+        if (center) {
+            delta=s->cf_shift+s->cf_sd*cb_rng_normal(&s->rng,&s->normal_spare,&s->has_spare);
+            /* Retry the entire mixture, not just the central component. Its
+             * mass below is the UNTRUNCATED normal mass, so rejected normal
+             * tails implement the central truncation without changing weights. */
+            if (fabs(delta)>s->cf_radius) continue;
+            env=fma(-.5*s->cf_min_curv,delta*delta,s->cf_derivative*delta)+s->cf_pad;
+        } else {
+#ifdef CB_ARS_DIAGNOSTICS
+            ++s->cf_tails;
+#endif
+            double logu=log(cb_ars_uniform(&s->rng));
+            if (component<s->cf_center_mass+s->cf_left_mass) {
+                delta=-s->cf_radius+logu/s->cf_left_s;
+                env=s->cf_left_f+logu+s->cf_pad;
+            } else {
+                delta=s->cf_radius+logu/s->cf_right_s;
+                env=s->cf_right_f+logu+s->cf_pad;
+            }
+        }
+        double u=cb_ars_uniform(&s->rng);
+        double squeeze=.5*(s->cf_max_curv-s->cf_min_curv)*delta*delta+2*s->cf_pad;
+        if (center && u<=1.0-squeeze) {
+#ifdef CB_ARS_DIAGNOSTICS
+            ++s->cf_squeezes;
+#endif
+        } else {
+#ifdef CB_ARS_DIAGNOSTICS
+            ++s->cf_evaluations;
+#endif
+            double f=target_relative(s,s->eta_star+delta);
+            if (!isfinite(f) || f>env) return 0;
+            if (log(u)>f-env) continue;
+        }
+        out[drawn++]=cb_exact_output(s->reflect ? -(s->eta_star+delta) : s->eta_star+delta);
     }
+    return 1;
 }
 
 static int draw_ars_batch(cb_stream_t *s, int n, double *out)
@@ -1563,7 +1643,7 @@ static int do_refill(cb_stream_t *s, int n_hint)
         s->buf_kind = CB_BUF_THETA;
         break;
     case CB_REGIME_CF:
-        draw_cf_batch(s, n, s->buf);
+        if (!draw_cf_batch(s, n, s->buf)) return 0;
         s->buf_kind = CB_BUF_THETA;
         break;
     case CB_REGIME_ARS:
@@ -1631,7 +1711,7 @@ static int draw_current_batch(cb_stream_t *s, int n, double *out)
         draw_gamma_batch(s, n, out);
         break;
     case CB_REGIME_CF:
-        draw_cf_batch(s, n, out);
+        if (!draw_cf_batch(s, n, out)) return 0;
         break;
     case CB_REGIME_ARS:
         if (!draw_ars_batch(s, n, out)) return 0;

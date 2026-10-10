@@ -28,7 +28,7 @@ setup(
             sources=["src/cb_sampler/_backend.c"],
             include_dirs=[str(ROOT / "src" / "c")],
             define_macros=[
-                ("CB_ENABLE_CF", "0"),
+                ("CB_ENABLE_CF", "1"),
                 ("CB_ENABLE_ZIG", "1"),
                 ("CB_ENABLE_DIAGNOSTICS", "0"),
             ],

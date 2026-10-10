@@ -301,3 +301,32 @@ def test_exact_ars_numerical_envelopes(tmp_path):
     assert result['lower_excess']['lower_excess'] == 0
     assert result['alias_mass_error']['alias_mass_error'] < 1e-14
     assert result['cdf_mass_error']['cdf_mass_error'] < 1e-14
+
+
+def test_exact_cf_population_and_envelope_regression(tmp_path):
+    import importlib.util
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location("cf_qualification", root / "tools/exact_cf/qualify.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    rows = module.run(tmp_path, n=10000)
+    symmetric = next(r for r in rows if r['chi']==250 and r['nu']==500)
+    # The old symmetric normal has H²=1.197e-7. This is a deterministic
+    # population-density check, independent of Monte Carlo resolution.
+    assert symmetric['accepted_density_h2'] < 1e-15
+    assert symmetric['evaluations'] > 0 and symmetric['squeezes'] > 0
+
+
+def test_cf_stats_replacement_invalidates_live_theta_buffers():
+    s = CbStream(250, 500, seed=1729, buf_size=64)
+    try:
+        for _ in range(20):
+            for chi, nu, mode, sigma in [(250,500,0,.155), (10000,1e6,-100,.1),
+                                         (500000,1e6,0,.0035), (250.5,500,.012,.155)]:
+                s.set_stats(chi,nu)
+                assert s.peek().regime == 2
+                theta=s.draw(1)[0]
+                eta=np.log(theta)-np.log1p(-theta)
+                assert abs(eta-mode)<12*sigma
+    finally:
+        s.close()
