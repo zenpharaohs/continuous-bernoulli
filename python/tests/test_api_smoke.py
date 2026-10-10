@@ -201,7 +201,7 @@ def test_python_validation_smoke():
     assert len(results) > 0
     assert all(r.passed for r in results)
     endpoints = [r for r in results if r.kind == "endpoint_eta"]
-    assert len(endpoints) == 66
+    assert len(endpoints) == 96
     assert any(r.path == "core/remainder" for r in endpoints)
     assert any(r.path == "live core buffer" for r in endpoints)
     assert any(r.chi > r.nu/2 for r in endpoints)
@@ -217,7 +217,7 @@ def test_python_validation_json_artifact(tmp_path):
     assert report['passed'] is True
     assert report['schema'] == 'cb_sampler.python_validation.v2'
     endpoints = [r for r in report['results'] if r['kind'] == 'endpoint_eta']
-    assert len(endpoints) == 66
+    assert len(endpoints) == 96
     assert sum(r['path'] == 'live core buffer' for r in endpoints) == 2
     assert all(r['reference_error'] <= 5e-7 for r in endpoints)
 

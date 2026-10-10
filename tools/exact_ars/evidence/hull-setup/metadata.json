@@ -1,0 +1,13 @@
+{
+  "baseline": "a5f277d",
+  "source_sha256": "b117845e5a25c68d979fd75e7bbfd74593e143d59df9ee065b62de3f5171b83d",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "compiler": "clang -O3",
+  "trials": 9,
+  "sizes": [
+    1,
+    64,
+    100000
+  ],
+  "timing": "Cold exact ARS hull per batch; excludes constructor, mode, scale and core; rotating trials; counter-free timings and separate diagnostic builds."
+}

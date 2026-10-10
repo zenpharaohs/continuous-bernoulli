@@ -508,7 +508,10 @@ static double hull_drop_point(cb_stream_t *s, double sign, double drop)
 {
     /* Tail geometry in log(-eta/mode) gives cheap asymmetric points.
      * Its exponential correction affects placement only, never acceptance. */
-    if (s->eta_star<-32.0) {
+    double guess=sqrt(2.0*drop);
+    /* Moderate skew has similar asymmetric geometry. Use its tail root
+     * only as a seed; the full target checks the drop in the Newton loop. */
+    if (s->eta_star<-8.0) {
         double r=drop/s->nu;
         double y=sign<0.0 ? log1p(r+sqrt(2.0*r)) : -sqrt(2.0*r)-r/3.0;
         for (int k=0;k<8;++k) {
@@ -519,10 +522,15 @@ static double hull_drop_point(cb_stream_t *s, double sign, double drop)
             y=next;
         }
         double point=s->eta_star*exp(y);
-        if (isfinite(point) && point<-32.0) return point;
+        if (isfinite(point)) {
+            if (s->eta_star<-32.0 && point<-32.0) return point;
+            double tail_guess=(point-s->eta_star)/(sign*s->sigma);
+            if (isfinite(tail_guess) && tail_guess>0.0) guess=tail_guess;
+        }
     }
-    double guess=sqrt(2.0*drop);
-    for (int k=0;k<3;++k) {
+    /* Four steps are often enough for moderate skew. Stopping at three
+     * discarded an almost-converged point and paid for a second solve. */
+    for (int k=0;k<6;++k) {
         double eta=s->eta_star+sign*s->sigma*guess;
         double f=target_relative(s,eta);
         if (isfinite(f) && fabs(f+drop)<.01*drop) return eta;

@@ -56,7 +56,8 @@ The shared C diagnostic flag `CB_VALIDATE_ETA` disables Gamma/CF approximations
 and returns eta before sigmoid rounding through the usual stream, reflection,
 and buffer path. Ordinary builds retain their theta output and regime policy.
 This prevents endpoint rounding from hiding a wrong latent distribution.
-All 66 latent cases use a two-sided KS limit of 3/sqrt(N), plus reference-grid
+Moderately skewed states and modes near the -8/-32 placement boundaries are
+also qualified in both reflections. All 96 latent cases use a two-sided KS limit of 3/sqrt(N), plus reference-grid
 error. Weak two-tangent envelopes must refine during actual draws, and refined
 hulls must survive refills and invalidate on statistics replacement. Independent
 log-concavity bounds certify the omitted reference tails. The independently evaluated density CDF must agree within 5e-7 on
@@ -116,3 +117,6 @@ proposal savings, and the independent 80-digit tangent and sensitivity audit.
 
 The [ordinary ARS profile](ordinary-ars-overhead.md) compares cumulative/alias
 selection, cached chords and inlining while retaining endpoint qualification.
+
+The [hull placement profile](hull-placement-setup.md) records bounded Newton
+and asymmetric seed setup savings, with an expanded threshold sensitivity audit.

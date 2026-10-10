@@ -153,6 +153,10 @@ if not args.benchmark_only:
     cases += [(math.nextafter(nu, 0), nu) for nu in [2, 7, 258, 594, 10000.0, 1000000.0]]
     if args.quick:
         cases = [(5e-151, 0.5), (2e-32, 2), (7e-20, 7), (594 - 593.9999812553783, 594), (1, 1000000.0), (400, 1000), (500000, 1000000.0), (math.nextafter(1000000.0, 0), 1000000.0)]
+    # Independent parameterization of mode thresholds, on both sides.
+    for a in ([] if args.quick else [8-1e-6,8+1e-6,32-1e-6,32+1e-6]):
+        z=1/a-1/math.expm1(a)
+        cases.extend((nu*z,nu) for nu in [.5,2,5,20,594,1e6])
     rows = []
     perturb = []
     with dec.localcontext() as ctx:

@@ -272,7 +272,10 @@ int bounded_failure(void) {
         for gap, nu in [(1.874462168e-5, 594), (2.846340396e-5, 258),
                         (1e-10, 2), (.02, 2), (.01, 49), (2, 200),
                         (7*3.8758505860895066e-32, 7), (7e-20, 7), (2e-32, 2),
-                        (7-np.nextafter(7.,0.),7), (2e-150,2), (1,1e6)]:
+                        (7-np.nextafter(7.,0.),7), (2e-150,2), (1,1e6),
+                        (.5,5), (.5,10), (2,20),
+                        (5*(1/8-1/np.expm1(8)),5),
+                        (5*(1/32-1/np.expm1(32)),5)]:
             for high in [False, True]:
                 # No double encodes the reflected interior counterpart when
                 # subtraction rounds to nu. Do not test an endpoint in its place.
