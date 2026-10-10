@@ -214,3 +214,32 @@ def test_examples_smoke():
     posterior = posterior_demo(n=128, seed=1)
     assert 0.0 < posterior["q05"] < posterior["q95"] < 1.0
     streaming_demo(seed=1)
+
+
+def test_endpoint_stats_replacements_return_with_live_buffers():
+    """A deadline makes the original endless remainder rejection a failure."""
+    import os
+    import subprocess
+    import sys
+    code = '''
+from cb_sampler import CbStream
+s = CbStream(0, 0, seed=1729, buf_size=64)
+for i in range(1, 3001):
+    nu = float(i)
+    gap = nu * 3.2e-8
+    s.set_stats(nu - gap, nu)
+    actual_gap = nu - (nu-gap)
+    assert abs(s.peek().sigma * actual_gap / nu**0.5 - 1) < 1e-8
+    assert len(s.draw(1)) == 1
+states = [(593.9999812553783, 594), (257.99997153659604, 258),
+          (2, 5), (300, 600), (0, 10), (10, 10)]
+states += [(nu-chi, nu) for chi, nu in states[:2]]
+for _ in range(20):
+    for chi, nu in states:
+        s.set_stats(chi, nu)
+        assert len(s.draw(7)) == 7
+s.close()
+'''
+    env = os.environ.copy()
+    env['PYTHONPATH'] = os.pathsep.join(map(str, sys.path))
+    subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=15)

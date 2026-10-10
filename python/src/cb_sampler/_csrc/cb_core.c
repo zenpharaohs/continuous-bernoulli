@@ -264,15 +264,15 @@ static void cb_clip_interior_draws(const cb_stream_t *s, int n, double *out)
  * ========================================================================= */
 static double log_seg_wt(double fi, double s, double pi, double a, double b)
 {
-    if (fabs(s) < 1e-8) return fi + log(b - a);
+    if (s == 0.0) return fi + log(b - a);
     if (s > 0) {
         double arg = s * (a - b);
         return (arg < -30) ? fi + s*(b-pi) - log(s)
-                           : fi + s*(b-pi) - log(s) + log1p(-exp(arg));
+                           : fi + s*(b-pi) - log(s) + log(-expm1(arg));
     } else {
         double arg = s * (b - a);
         return (arg < -30) ? fi + s*(a-pi) - log(-s)
-                           : fi + s*(a-pi) - log(-s) + log1p(-exp(arg));
+                           : fi + s*(a-pi) - log(-s) + log(-expm1(arg));
     }
 }
 
@@ -328,7 +328,7 @@ static double cb_mode_warm(double chi, double nu, double eta)
 static double logdiffexp(double a, double b)
 {
     if (b >= a) return -INFINITY;
-    return a + log1p(-exp(b - a));
+    return a + log(-expm1(b - a));
 }
 
 static double sample_trunc_exp(cb_rng_t *r, double s, double a, double b);
@@ -448,7 +448,7 @@ static void hull_proposal_pre(cb_stream_t *s, const double *probs, double sum,
     double ep;
     if (seg == 0) ep = b + log(u2) / sl;
     else if (seg == m-1) ep = a + log1p(-u2) / sl;
-    else if (fabs(sl) < 1e-8) ep = a + u2 * (b - a);
+    else if (sl == 0.0) ep = a + u2 * (b - a);
     else if (sl > 0.0) ep = a + log1p( u2 *  h->exm1[seg]) / sl;
     else ep = a + log1p(-u2 * (-h->exm1[seg])) / sl;
 
@@ -893,7 +893,7 @@ static void determine_regime(cb_stream_t *s)
             if (zbar > 0.5) {
                 double rate_hi = nu - chi;
                 double mean_tau_hi = (nu + 1.0) / rate_hi;
-                if (mean_tau_hi > 3.67) goto ars_regime;
+                if (mean_tau_hi > 3.67) goto exact_mode;
             }
             s->regime = CB_REGIME_GAMMA;
             s->sigma  = 0.0;
@@ -905,6 +905,9 @@ static void determine_regime(cb_stream_t *s)
 
     /* Use chi_eff for mode/sigma so hulls are built for the
      * low-Z reflected distribution when reflect=1. */
+    /* The Gamma precision guard must enter before recomputing the current
+     * mode and scale, including when set_stats replaces a live core state. */
+    exact_mode:;
     double chi_e    = s->chi_eff;
     double eta_star = (s->mode_valid && old_reflect == s->reflect)
                     ? cb_mode_warm(chi_e, nu, s->eta_star)
@@ -946,7 +949,7 @@ static void determine_regime(cb_stream_t *s)
 static double sample_trunc_exp(cb_rng_t *r, double s, double a, double b)
 {
     double u = cb_rng_uniform(r);
-    if (fabs(s) < 1e-8)        return a + u*(b - a);
+    if (s == 0.0)        return a + u*(b - a);
     if (s > 0 && a <= -INFINITY) return b + log(u) / s;
     if (s < 0 && b >=  INFINITY)  return a + log1p(-u) / s;
     if (s > 0)                    return a + log1p(u * expm1(s*(b - a))) / s;
@@ -1068,12 +1071,14 @@ static void draw_ars_batch(cb_stream_t *s, int n, double *out)
                 ep = a + log1p(-u2) / sl;
             } else {
                 /* Middle segment: use precomputed exm1[seg] = expm1(s*(b-a)).
-                 * Guard for |sl| < 1e-8: the center hull point sits exactly at
+                 * A truly zero slope uses uniform inversion. Small nonzero
+                 * slopes must retain the exponential: endpoint-adjacent
+                 * segments can be very wide. The center point sits at
                  * the posterior mode where slope = chi - nu*B'(eta*) = 0 by
                  * definition.  Fall back to uniform over [a,bv] -- same as
                  * the original sample_trunc_exp() for the zero-slope case. */
                 double u2 = cb_rng_uniform(&s->rng);
-                if (fabs(sl) < 1e-8)
+                if (sl == 0.0)
                     ep = a + u2 * (bv - a);
                 else if (sl > 0.0)
                     ep = a + log1p( u2 *  h->exm1[seg]) / sl;
@@ -1197,12 +1202,12 @@ static void draw_core_batch(cb_stream_t *s, int n, double *out)
     }
 }
 
-static void draw_remainder_batch(cb_stream_t *s, int n, double *out)
+static int draw_remainder_batch(cb_stream_t *s, int n, double *out)
 {
-    if (n <= 0) return;
+    if (n <= 0) return 1;
     if (!s->core_valid) {
         draw_ars_batch(s, n, out);
-        return;
+        return 1;
     }
 
     int cache_ok = s->rem_valid
@@ -1244,7 +1249,11 @@ static void draw_remainder_batch(cb_stream_t *s, int n, double *out)
     for (int i = 0; i < h->m; i++) { probs[i] = exp(h->logwts[i] - mx); sum += probs[i]; }
 
     int drawn = 0;
+    uint64_t proposals = 0;
     while (drawn < n) {
+        /* A failed remainder certificate must report failure, never hang or
+         * replace a selected remainder with a draw from another density. */
+        if (++proposals > 1000000ULL * (uint64_t)n) return 0;
         double eta, log_env;
         hull_proposal_pre(s, probs, sum, &eta, &log_env);
         double lf = target_log_f(chi, nu, eta);
@@ -1262,6 +1271,7 @@ static void draw_remainder_batch(cb_stream_t *s, int n, double *out)
     }
     s->remainder_draws += (uint64_t)n;
     s->hull_valid = 0;
+    return 1;
 }
 
 /* =========================================================================
@@ -1517,7 +1527,7 @@ int cb_stream_draw(cb_stream_t *s, int n, double *out)
             double p_rem = 1.0 - s->core_alpha_hat;
             if (cb_rng_uniform(&s->rng) < p_rem) {
                 double rem;
-                draw_remainder_batch(s, 1, &rem);
+                if (!draw_remainder_batch(s, 1, &rem)) return -1;
                 out[0] = s->reflect ? 1.0 - rem : rem;
             } else {
                 double u = s->buf[s->buf_pos++];
@@ -1564,7 +1574,10 @@ int cb_stream_draw(cb_stream_t *s, int n, double *out)
             if (k_rem > 0) {
                 double *rem = (double *)malloc((size_t)k_rem * sizeof(double));
                 if (!rem) return drawn;
-                draw_remainder_batch(s, k_rem, rem);
+                if (!draw_remainder_batch(s, k_rem, rem)) {
+                    free(rem);
+                    return -1;
+                }
                 if (s->reflect) {
                     for (int i = 0; i < k_rem; i++)
                         rem[i] = 1.0 - rem[i];
